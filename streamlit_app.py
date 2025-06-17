@@ -361,7 +361,7 @@ if not store_pivot.empty:
     }).applymap(highlight_change, subset=['Change (₹)', 'Change (%)']), use_container_width=True)
 
     # Reasons for decreases
-    st.write("**Reasons for Warranty Sales Decreases:**")
+    st.write("*Reasons for Warranty Sales Decreases:*")
     decreased_stores = store_pivot[store_pivot['Change (%)'] < 0]
     if not decreased_stores.empty:
         category_warranty = filtered_df.groupby(['Store', 'Month', 'Item Category'])['WarrantyPrice'].sum().reset_index()
@@ -381,7 +381,7 @@ if not store_pivot.empty:
             change_amt = row['Change (₹)']
             change_pct = row['Change (%)']
             
-            st.write(f"**{store} (Decrease: ₹{abs(change_amt):,.0f}, {change_pct:.2f}%):**")
+            st.write(f"*{store} (Decrease: ₹{abs(change_amt):,.0f}, {change_pct:.2f}%):*")
             reasons = []
             
             store_cat = category_pivot_warranty.loc[store] if store in category_pivot_warranty.index.get_level_values(0) else pd.DataFrame()
@@ -404,7 +404,7 @@ if not store_pivot.empty:
             if reasons:
                 for reason in reasons:
                     st.write(f"- {reason}")
-                st.write("**Recommendations:**")
+                st.write("*Recommendations:*")
                 st.write("- Review sales strategies for underperforming product categories.")
                 st.write("- Enhance staff training on warranty benefits.")
                 st.write("- Introduce targeted promotions for warranty products.")
@@ -419,14 +419,14 @@ else:
 st.subheader("Significant Changes")
 significant_stores = store_conv_pivot[abs(store_conv_pivot['Count Conversion Change (%)']) > 2]
 if not significant_stores.empty:
-    st.write("**Stores with Significant Count Conversion Changes:**")
+    st.write("*Stores with Significant Count Conversion Changes:*")
     for store in significant_stores.index:
         change = float(store_conv_pivot.loc[store, 'Count Conversion Change (%)'])
         st.write(f"- {store}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
 
 significant_rbms = rbm_pivot[abs(rbm_pivot['Count Conversion Change (%)']) > 2]
 if not significant_rbms.empty:
-    st.write("**RBMs with Significant Count Conversion Changes:**")
+    st.write("*RBMs with Significant Count Conversion Changes:*")
     for rbm in significant_rbms.index:
         change = float(rbm_pivot.loc[rbm, 'Count Conversion Change (%)'])
         st.write(f"- {rbm}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
@@ -434,7 +434,7 @@ if not significant_rbms.empty:
 if not category_pivot.empty:
     significant_categories = category_pivot[abs(category_pivot['Count Conversion Change (%)']) > 2]
     if not significant_categories.empty:
-        st.write("**Item Categories with Significant Count Conversion Changes:**")
+        st.write("*Item Categories with Significant Count Conversion Changes:*")
         for category in significant_categories.index:
             change = float(category_pivot.loc[category, 'Count Conversion Change (%)'])
             st.write(f"- {category}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
@@ -451,7 +451,7 @@ if not low_performers.empty:
     for _, row in low_performers.iterrows():
         st.write(f"- {row['Store']}: {row['Conversion% (Count)']:.2f}%")
     
-    st.write("**Recommendations:**")
+    st.write("*Recommendations:*")
     st.write("1. Provide additional training on warranty benefits")
     st.write("2. Create targeted promotions")
     st.write("3. Review staffing and sales strategies")
@@ -479,7 +479,7 @@ if future_filter or any('FUTURE' in store for store in filtered_df['Store'].uniq
         st.write(f"Average count conversion in FUTURE stores (June): {june_future_count:.2f}%")
         if june_future_count < may_future_count:
             st.warning("FUTURE stores count conversion declined in June.")
-            st.write("**Recommendations:**")
+            st.write("*Recommendations:*")
             st.write("- Conduct store-specific training")
             st.write("- Analyze customer demographics")
         else:
