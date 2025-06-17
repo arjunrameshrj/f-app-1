@@ -1,9 +1,18 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import os
 
 # Streamlit page configuration
 st.set_page_config(page_title="Warranty Conversion Dashboard", layout="wide")
+
+# Create data directory if it doesn't exist
+DATA_DIR = "data"
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
+
+MAY_FILE_PATH = os.path.join(DATA_DIR, "may_data.csv")
+JUNE_FILE_PATH = os.path.join(DATA_DIR, "june_data.csv")
 
 # Title
 st.title("📊 Warranty Conversion Analysis Dashboard")
@@ -16,16 +25,18 @@ with col1:
 with col2:
     june_file = st.file_uploader("Upload June data file", type=["csv", "xlsx", "xls"], key="june")
 
-# Load data
+# Load data function
 required_columns = ['Item Category', 'BDM', 'RBM', 'Store', 'Staff Name', 'TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']
 
 @st.cache_data
-def load_data(file, month):
+def load_data(file, month, file_path=None):
     if file is not None:
         try:
-            if file.name.endswith('.csv'):
+            if isinstance(file, str):  # File path
                 df = pd.read_csv(file)
-            else:
+            elif file.name.endswith('.csv'):  # Uploaded CSV
+                df = pd.read_csv(file)
+            else:  # Uploaded Excel
                 df = pd.read_excel(file, engine='openpyxl')
             missing_columns = [col for col in required_columns if col not in df.columns]
             if missing_columns:
@@ -40,17 +51,39 @@ def load_data(file, month):
             df['Month'] = month
             df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
             df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).where(df['TotalSoldPrice'] > 0, 0).round(2)
+            # Save uploaded file as CSV if file is provided and not a file path
+            if file_path and not isinstance(file, str):
+                if file.name.endswith('.csv'):
+                    with open(file_path, 'wb') as f:
+                        f.write(file.getvalue())
+                else:
+                    df.to_csv(file_path, index=False)
+                st.success(f"{month} data saved successfully.")
             return df
         except Exception as e:
             st.error(f"Error loading {month} file: {str(e)}")
             return None
     return None
 
-# Load both datasets
-may_df = load_data(may_file, "May") if may_file else None
-june_df = load_data(june_file, "June") if june_file else None
+# Load data
+may_df = None
+june_df = None
 
-# If no files uploaded, use sample data with MAHESH and RENJITH
+# Handle new uploads first
+if may_file:
+    may_df = load_data(may_file, "May", MAY_FILE_PATH)
+if june_file:
+    june_df = load_data(june_file, "June", JUNE_FILE_PATH)
+
+# If no new uploads, load from saved files if they exist
+if may_df is None and os.path.exists(MAY_FILE_PATH):
+    may_df = load_data(MAY_FILE_PATH, "May")
+    st.info("Loaded saved May data.")
+if june_df is None and os.path.exists(JUNE_FILE_PATH):
+    june_df = load_data(JUNE_FILE_PATH, "June")
+    st.info("Loaded saved June data.")
+
+# If no uploaded or saved files, use sample data
 if may_df is None and june_df is None:
     data = {
         'Item Category': ['Electronics', 'Appliances'] * 12,
@@ -61,7 +94,7 @@ if may_df is None and june_df is None:
         'TotalSoldPrice': [48239177/2, 48239177/2, 48239177/2, 48239177/2, 1200000, 1300000] * 4,
         'WarrantyPrice': [300619/2, 300619/2, 300619/2, 300619/2, 6420, 6955] * 4,
         'TotalCount': [5286, 5286, 5286, 5286, 1200, 1300] * 4,
-        'WarrantyCount': [483, 483, 483, 483, 60, 65] * 4  # Adjusted for RENJITH May: 5.00%
+        'WarrantyCount': [483, 483, 483, 483, 60, 65] * 4
     }
     may_df = pd.DataFrame(data).copy()
     may_df['Month'] = "May"
@@ -77,7 +110,7 @@ if may_df is None and june_df is None:
         'TotalSoldPrice': [51435759/2, 51435759/2, 51435759/2, 51435759/2, 1260000, 1365000] * 4,
         'WarrantyPrice': [175000, 175000, 150000, 150000, 6000, 6500] * 2 + [175000, 175000, 150000, 150000, 6000, 6500] * 2,
         'TotalCount': [5450, 5450, 5450, 5450, 1236, 1339] * 4,
-        'WarrantyCount': [448, 448, 448, 448, 90, 98] * 2 + [495, 495, 495, 495, 112, 121] * 2  # RENJITH June: 9.06%
+        'WarrantyCount': [448, 448, 448, 448, 90, 98] * 2 + [495, 495, 495, 495, 112, 121] * 2
     }
     june_df = pd.DataFrame(june_data).copy()
     june_df['Month'] = "June"
@@ -361,7 +394,7 @@ if not store_pivot.empty:
     }).applymap(highlight_change, subset=['Change (₹)', 'Change (%)']), use_container_width=True)
 
     # Reasons for decreases
-    st.write("*Reasons for Warranty Sales Decreases:*")
+    st.write("**Reasons for Warranty Sales Decreases:**")
     decreased_stores = store_pivot[store_pivot['Change (%)'] < 0]
     if not decreased_stores.empty:
         category_warranty = filtered_df.groupby(['Store', 'Month', 'Item Category'])['WarrantyPrice'].sum().reset_index()
@@ -381,7 +414,7 @@ if not store_pivot.empty:
             change_amt = row['Change (₹)']
             change_pct = row['Change (%)']
             
-            st.write(f"*{store} (Decrease: ₹{abs(change_amt):,.0f}, {change_pct:.2f}%):*")
+            st.write(f"**{store} (Decrease: ₹{abs(change_amt):,.0f}, {change_pct:.2f}%):**")
             reasons = []
             
             store_cat = category_pivot_warranty.loc[store] if store in category_pivot_warranty.index.get_level_values(0) else pd.DataFrame()
@@ -404,7 +437,7 @@ if not store_pivot.empty:
             if reasons:
                 for reason in reasons:
                     st.write(f"- {reason}")
-                st.write("*Recommendations:*")
+                st.write("**Recommendations:**")
                 st.write("- Review sales strategies for underperforming product categories.")
                 st.write("- Enhance staff training on warranty benefits.")
                 st.write("- Introduce targeted promotions for warranty products.")
@@ -419,14 +452,14 @@ else:
 st.subheader("Significant Changes")
 significant_stores = store_conv_pivot[abs(store_conv_pivot['Count Conversion Change (%)']) > 2]
 if not significant_stores.empty:
-    st.write("*Stores with Significant Count Conversion Changes:*")
+    st.write("**Stores with Significant Count Conversion Changes:**")
     for store in significant_stores.index:
         change = float(store_conv_pivot.loc[store, 'Count Conversion Change (%)'])
         st.write(f"- {store}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
 
 significant_rbms = rbm_pivot[abs(rbm_pivot['Count Conversion Change (%)']) > 2]
 if not significant_rbms.empty:
-    st.write("*RBMs with Significant Count Conversion Changes:*")
+    st.write("**RBMs with Significant Count Conversion Changes:**")
     for rbm in significant_rbms.index:
         change = float(rbm_pivot.loc[rbm, 'Count Conversion Change (%)'])
         st.write(f"- {rbm}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
@@ -434,7 +467,7 @@ if not significant_rbms.empty:
 if not category_pivot.empty:
     significant_categories = category_pivot[abs(category_pivot['Count Conversion Change (%)']) > 2]
     if not significant_categories.empty:
-        st.write("*Item Categories with Significant Count Conversion Changes:*")
+        st.write("**Item Categories with Significant Count Conversion Changes:**")
         for category in significant_categories.index:
             change = float(category_pivot.loc[category, 'Count Conversion Change (%)'])
             st.write(f"- {category}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
@@ -451,7 +484,7 @@ if not low_performers.empty:
     for _, row in low_performers.iterrows():
         st.write(f"- {row['Store']}: {row['Conversion% (Count)']:.2f}%")
     
-    st.write("*Recommendations:*")
+    st.write("**Recommendations:**")
     st.write("1. Provide additional training on warranty benefits")
     st.write("2. Create targeted promotions")
     st.write("3. Review staffing and sales strategies")
@@ -479,7 +512,7 @@ if future_filter or any('FUTURE' in store for store in filtered_df['Store'].uniq
         st.write(f"Average count conversion in FUTURE stores (June): {june_future_count:.2f}%")
         if june_future_count < may_future_count:
             st.warning("FUTURE stores count conversion declined in June.")
-            st.write("*Recommendations:*")
+            st.write("**Recommendations:**")
             st.write("- Conduct store-specific training")
             st.write("- Analyze customer demographics")
         else:
