@@ -318,13 +318,19 @@ with st.sidebar:
     rbm_options = ['All'] + sorted(df['RBM'].unique().tolist())
     store_options = ['All'] + sorted(df['Store'].unique().tolist())
     category_options = ['All'] + sorted(df['Item Category'].unique().tolist())
-    staff_options = ['All'] + sorted(df['Staff Name'].unique().tolist())
 
     selected_bdm = st.selectbox("BDM", bdm_options, index=0)
     selected_rbm = st.selectbox("RBM", rbm_options, index=0)
     selected_store = st.selectbox("Store", store_options, index=0)
     selected_category = st.selectbox("Item Category", category_options, index=0)
+
+    # Dynamic staff filter based on selected RBM
+    if selected_rbm != 'All':
+        staff_options = ['All'] + sorted(df[df['RBM'] == selected_rbm]['Staff Name'].unique().tolist())
+    else:
+        staff_options = ['All'] + sorted(df['Staff Name'].unique().tolist())
     selected_staff = st.selectbox("Staff", staff_options, index=0)
+
     future_filter = st.checkbox("Show only FUTURE stores")
     decreased_rbm_filter = st.checkbox("Show only RBMs with decreased count conversion")
 
