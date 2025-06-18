@@ -163,11 +163,13 @@ def authenticate(username, password):
     credentials = load_credentials()
     return username in credentials and credentials[username] == hash_password(password)
 
-# Session state for authentication
+# Session state initialization
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 if 'show_upload_form' not in st.session_state:
     st.session_state.show_upload_form = False
+if 'user_role' not in st.session_state:
+    st.session_state.user_role = "non-admin"
 
 # Main dashboard
 st.markdown('<h1 class="main-header">📊 Warranty Conversion Analysis Dashboard</h1>', unsafe_allow_html=True)
@@ -209,16 +211,23 @@ def load_data(file, month, file_path=None):
         st.error(f"Error loading {month} file: {str(e)}")
         return None
 
-# Handle new uploads (only if authenticated)
+# Load saved data or handle new uploads
 may_df = None
 june_df = None
-if st.session_state.authenticated and st.session_state.show_upload_form:
-    if 'may_file' in locals() and may_file:
+
+# Handle new uploads for admin only
+if st.session_state.user_role == "admin" and st.session_state.authenticated and st.session_state.show_upload_form:
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        may_file = st.sidebar.file_uploader("May Data", type=["csv", "xlsx", "xls"], key="may")
+    with col2:
+        june_file = st.sidebar.file_uploader("June Data", type=["csv", "xlsx", "xls"], key="june")
+    if may_file:
         may_df = load_data(may_file, "May", MAY_FILE_PATH)
-    if 'june_file' in locals() and june_file:
+    if june_file:
         june_df = load_data(june_file, "June", JUNE_FILE_PATH)
 
-# Load from saved files if no new uploads
+# Load saved data if no new uploads
 if may_df is None and os.path.exists(MAY_FILE_PATH):
     may_df = load_data(MAY_FILE_PATH, "May")
     if may_df is not None:
@@ -282,36 +291,33 @@ with st.sidebar:
     st.markdown('<h2 style="color: #3730a3; font-weight: 600;">🔍 Dashboard Controls</h2>', unsafe_allow_html=True)
     st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 10px 0;">', unsafe_allow_html=True)
     
-    # Show login form or uploaders based on authentication and user action
-    if st.session_state.show_upload_form:
-        if not st.session_state.authenticated:
-            with st.form("login_form"):
-                st.markdown('<h3 style="color: #3730a3; font-weight: 500;">🔐 Admin Login</h3>', unsafe_allow_html=True)
-                username = st.text_input("Username", placeholder="Enter your username")
-                password = st.text_input("Password", type="password", placeholder="Enter your password")
-                submit = st.form_submit_button("Login", type="primary")
-                if submit:
-                    if authenticate(username, password):
-                        st.session_state.authenticated = True
-                        st.success("Logged in successfully!")
-                    else:
-                        st.error("Invalid username or password.")
+    # Admin-specific controls
+    if st.session_state.user_role == "admin":
+        if st.session_state.show_upload_form:
+            if not st.session_state.authenticated:
+                with st.form("login_form"):
+                    st.markdown('<h3 style="color: #3730a3; font-weight: 500;">🔐 Admin Login</h3>', unsafe_allow_html=True)
+                    username = st.text_input("Username", placeholder="Enter your username")
+                    password = st.text_input("Password", type="password", placeholder="Enter your password")
+                    submit = st.form_submit_button("Login", type="primary")
+                    if submit:
+                        if authenticate(username, password):
+                            st.session_state.authenticated = True
+                            st.session_state.user_role = "admin"
+                            st.success("Logged in successfully!")
+                        else:
+                            st.error("Invalid username or password.")
+            else:
+                st.markdown('<h3 style="color: #3730a3; font-weight: 500;">📁 Upload Data Files</h3>', unsafe_allow_html=True)
+                st.button("Logout", on_click=lambda: st.session_state.update(authenticated=False, show_upload_form=False, user_role="non-admin"))
         else:
-            st.markdown('<h3 style="color: #3730a3; font-weight: 500;">📁 Upload Data Files</h3>', unsafe_allow_html=True)
-            col1, col2 = st.columns(2)
-            with col1:
-                may_file = st.file_uploader("May Data", type=["csv", "xlsx", "xls"], key="may")
-            with col2:
-                june_file = st.file_uploader("June Data", type=["csv", "xlsx", "xls"], key="june")
-            st.button("Logout", on_click=lambda: st.session_state.update(authenticated=False, show_upload_form=False))
-    else:
-        if st.session_state.authenticated:
-            st.button("Upload New Data", on_click=lambda: st.session_state.update(show_upload_form=True))
-            st.button("Logout", on_click=lambda: st.session_state.update(authenticated=False, show_upload_form=False))
-        else:
-            st.button("Upload New Data", on_click=lambda: st.session_state.update(show_upload_form=True))
+            if st.session_state.authenticated:
+                st.button("Upload New Data", on_click=lambda: st.session_state.update(show_upload_form=True))
+                st.button("Logout", on_click=lambda: st.session_state.update(authenticated=False, show_upload_form=False, user_role="non-admin"))
+            else:
+                st.button("Admin Login", on_click=lambda: st.session_state.update(show_upload_form=True))
 
-    # Sidebar filters
+    # Sidebar filters (visible to all users)
     st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 20px 0;">', unsafe_allow_html=True)
     st.markdown('<h3 style="color: #3730a3; font-weight: 500;">⚙️ Filters</h3>', unsafe_allow_html=True)
     bdm_options = ['All'] + sorted(df['BDM'].unique().tolist())
