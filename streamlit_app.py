@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import os
+import hashlib
+from datetime import datetime
 
 # Streamlit page configuration
 st.set_page_config(page_title="Warranty Conversion Dashboard", layout="wide")
@@ -13,75 +15,130 @@ if not os.path.exists(DATA_DIR):
 
 MAY_FILE_PATH = os.path.join(DATA_DIR, "may_data.csv")
 JUNE_FILE_PATH = os.path.join(DATA_DIR, "june_data.csv")
+USER_CREDENTIALS_FILE = os.path.join(DATA_DIR, "user_credentials.txt")
+
+# Function to hash passwords
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# Initialize user credentials (admin user for file upload access)
+def initialize_credentials():
+    if not os.path.exists(USER_CREDENTIALS_FILE):
+        with open(USER_CREDENTIALS_FILE, 'w') as f:
+            # Default admin credentials: username=admin, password=admin123
+            f.write(f"admin:{hash_password('admin123')}\n")
+
+initialize_credentials()
+
+# Load credentials
+def load_credentials():
+    credentials = {}
+    if os.path.exists(USER_CREDENTIALS_FILE):
+        with open(USER_CREDENTIALS_FILE, 'r') as f:
+            for line in f:
+                username, hashed_pwd = line.strip().split(':')
+                credentials[username] = hashed_pwd
+    return credentials
+
+# Authentication function
+def authenticate(username, password):
+    credentials = load_credentials()
+    return username in credentials and credentials[username] == hash_password(password)
 
 # Title
 st.title("📊 Warranty Conversion Analysis Dashboard")
 
-# File uploaders
-st.subheader("Upload Data Files")
-col1, col2 = st.columns(2)
-with col1:
-    may_file = st.file_uploader("Upload May data file", type=["csv", "xlsx", "xls"], key="may")
-with col2:
-    june_file = st.file_uploader("Upload June data file", type=["csv", "xlsx", "xls"], key="june")
+# Session state for authentication
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'show_login' not in st.session_state:
+    st.session_state.show_login = False
+
+# Login form
+if not st.session_state.authenticated:
+    if st.button("Login as Admin"):
+        st.session_state.show_login = True
+
+    if st.session_state.show_login:
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submit = st.form_submit_button("Login")
+            if submit:
+                if authenticate(username, password):
+                    st.session_state.authenticated = True
+                    st.session_state.show_login = False
+                    st.success("Logged in successfully!")
+                else:
+                    st.error("Invalid username or password.")
+else:
+    st.button("Logout", on_click=lambda: st.session_state.update(authenticated=False))
 
 # Load data function
 required_columns = ['Item Category', 'BDM', 'RBM', 'Store', 'Staff Name', 'TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']
 
 @st.cache_data
 def load_data(file, month, file_path=None):
-    if file is not None:
-        try:
-            if isinstance(file, str):  # File path
-                df = pd.read_csv(file)
-            elif file.name.endswith('.csv'):  # Uploaded CSV
-                df = pd.read_csv(file)
-            else:  # Uploaded Excel
-                df = pd.read_excel(file, engine='openpyxl')
-            missing_columns = [col for col in required_columns if col not in df.columns]
-            if missing_columns:
-                st.error(f"Missing columns in {month} file: {', '.join(missing_columns)}")
-                return None
-            numeric_cols = ['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']
-            for col in numeric_cols:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            if df[numeric_cols].isna().any().any():
-                st.warning(f"Missing or invalid values in {month} file numeric columns. Filling with 0.")
-                df[numeric_cols] = df[numeric_cols].fillna(0)
-            df['Month'] = month
-            df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
-            df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).where(df['TotalSoldPrice'] > 0, 0).round(2)
-            # Save uploaded file as CSV if file is provided and not a file path
-            if file_path and not isinstance(file, str):
-                if file.name.endswith('.csv'):
-                    with open(file_path, 'wb') as f:
-                        f.write(file.getvalue())
-                else:
-                    df.to_csv(file_path, index=False)
-                st.success(f"{month} data saved successfully.")
-            return df
-        except Exception as e:
-            st.error(f"Error loading {month} file: {str(e)}")
+    try:
+        if isinstance(file, str):  # File path
+            df = pd.read_csv(file)
+        elif file.name.endswith('.csv'):  # Uploaded CSV
+            df = pd.read_csv(file)
+        else:  # Uploaded Excel
+            df = pd.read_excel(file, engine='openpyxl')
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            st.error(f"Missing columns in {month} file: {', '.join(missing_columns)}")
             return None
-    return None
+        numeric_cols = ['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        if df[numeric_cols].isna().any().any():
+            st.warning(f"Missing or invalid values in {month} file numeric columns. Filling with 0.")
+            df[numeric_cols] = df[numeric_cols].fillna(0)
+        df['Month'] = month
+        df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
+        df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).where(df['TotalSoldPrice'] > 0, 0).round(2)
+        # Save uploaded file as CSV if file is provided and not a file path
+        if file_path and not isinstance(file, str):
+            if file.name.endswith('.csv'):
+                with open(file_path, 'wb') as f:
+                    f.write(file.getvalue())
+            else:
+                df.to_csv(file_path, index=False)
+            st.success(f"{month} data saved successfully.")
+        return df
+    except Exception as e:
+        st.error(f"Error loading {month} file: {str(e)}")
+        return None
 
-# Load data
+# File uploaders (only visible to authenticated users)
 may_df = None
 june_df = None
 
-# Handle new uploads first
-if may_file:
-    may_df = load_data(may_file, "May", MAY_FILE_PATH)
-if june_file:
-    june_df = load_data(june_file, "June", JUNE_FILE_PATH)
+if st.session_state.authenticated:
+    st.subheader("Upload Data Files")
+    col1, col2 = st.columns(2)
+    with col1:
+        may_file = st.file_uploader("Upload May data file", type=["csv", "xlsx", "xls"], key="may")
+    with col2:
+        june_file = st.file_uploader("Upload June data file", type=["csv", "xlsx", "xls"], key="june")
 
-# If no new uploads, load from saved files if they exist
+    # Handle new uploads
+    if may_file:
+        may_df = load_data(may_file, "May", MAY_FILE_PATH)
+    if june_file:
+        june_df = load_data(june_file, "June", JUNE_FILE_PATH)
+
+# Load from saved files if no new uploads
 if may_df is None and os.path.exists(MAY_FILE_PATH):
     may_df = load_data(MAY_FILE_PATH, "May")
-    st.info("Loaded saved May data.")
+    if may_df is not None:
+        st.info("Loaded saved May data.")
 if june_df is None and os.path.exists(JUNE_FILE_PATH):
     june_df = load_data(JUNE_FILE_PATH, "June")
-    st.info("Loaded saved June data.")
+    if june_df is not None:
+        st.info("Loaded saved June data.")
 
 # If no uploaded or saved files, use sample data
 if may_df is None and june_df is None:
