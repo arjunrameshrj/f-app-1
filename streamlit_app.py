@@ -194,51 +194,89 @@ def load_data(file, month, file_path=None):
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         if df[numeric_cols].isna().any().any():
-            st.warning(f"Missing or invalid values in {month} file numeric columns. Filling with 0.")
+            st.warning(f"Missing or invalid values in numeric columns for {month}. Filling with 0.")
             df[numeric_cols] = df[numeric_cols].fillna(0)
-        df['Month'] = month
         df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
         df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).where(df['TotalSoldPrice'] > 0, 0).round(2)
+        df['Month'] = month
         if file_path and not isinstance(file, str):
             if file.name.endswith('.csv'):
                 with open(file_path, 'wb') as f:
                     f.write(file.getvalue())
             else:
                 df.to_csv(file_path, index=False)
-            st.success(f"{month} data saved successfully.")
+            st.success(f"{month} data saved successfully and available to all users.")
         return df
     except Exception as e:
         st.error(f"Error loading {month} file: {str(e)}")
         return None
 
 # Load saved data or handle new uploads
-may_df = None
-june_df = None
+df = None
 
-# Handle new uploads for admin only
-if st.session_state.user_role == "admin" and st.session_state.authenticated and st.session_state.show_upload_form:
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        may_file = st.sidebar.file_uploader("May Data", type=["csv", "xlsx", "xls"], key="may")
-    with col2:
-        june_file = st.sidebar.file_uploader("June Data", type=["csv", "xlsx", "xls"], key="june")
-    if may_file:
-        may_df = load_data(may_file, "May", MAY_FILE_PATH)
-    if june_file:
-        june_df = load_data(june_file, "June", JUNE_FILE_PATH)
+# Sidebar content
+with st.sidebar:
+    st.markdown('<h2 style="color: #3730a3; font-weight: 600;">🔍 Dashboard Controls</h2>', unsafe_allow_html=True)
+    st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 10px 0;">', unsafe_allow_html=True)
+    
+    # File upload form (visible to all users, password-protected)
+    st.markdown('<h3 style="color: #3730a3; font-weight: 500;">📁 Upload Data Files</h3>', unsafe_allow_html=True)
+    with st.form("upload_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            may_file = st.file_uploader("May Data", type=["csv", "xlsx", "xls"], key="may")
+        with col2:
+            june_file = st.file_uploader("June Data", type=["csv", "xlsx", "xls"], key="june")
+        upload_password = st.text_input("Upload Password", type="password", placeholder="Enter password to upload")
+        submit_upload = st.form_submit_button("Upload", type="primary")
+        if submit_upload:
+            if authenticate("admin", upload_password):
+                may_df = load_data(may_file, "May", MAY_FILE_PATH) if may_file else None
+                june_df = load_data(june_file, "June", JUNE_FILE_PATH) if june_file else None
+                if may_df is not None or june_df is not None:
+                    df_list = [df for df in [may_df, june_df] if df is not None]
+                    if df_list:
+                        df = pd.concat(df_list, ignore_index=True)
+            else:
+                st.error("Invalid password. Upload failed.")
+            if not may_file and not june_file:
+                st.warning("Please select at least one file to upload.")
 
-# Load saved data if no new uploads
-if may_df is None and os.path.exists(MAY_FILE_PATH):
-    may_df = load_data(MAY_FILE_PATH, "May")
-    if may_df is not None:
-        st.info("Loaded saved May data.")
-if june_df is None and os.path.exists(JUNE_FILE_PATH):
-    june_df = load_data(JUNE_FILE_PATH, "June")
-    if june_df is not None:
-        st.info("Loaded saved June data.")
+    # Admin login (kept for potential admin-specific actions)
+    st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 20px 0;">', unsafe_allow_html=True)
+    if st.session_state.user_role == "admin" and st.session_state.authenticated:
+        st.button("Logout", on_click=lambda: st.session_state.update(authenticated=False, show_upload_form=False, user_role="non-admin"))
+    else:
+        st.button("Admin Login", on_click=lambda: st.session_state.update(show_upload_form=True))
+        if st.session_state.show_upload_form and not st.session_state.authenticated:
+            with st.form("login_form"):
+                st.markdown('<h3 style="color: #3730a3; font-weight: 500;">🔐 Admin Login</h3>', unsafe_allow_html=True)
+                username = st.text_input("Username", placeholder="Enter your username")
+                password = st.text_input("Password", type="password", placeholder="Enter your password")
+                submit_login = st.form_submit_button("Login", type="primary")
+                if submit_login:
+                    if authenticate(username, password):
+                        st.session_state.authenticated = True
+                        st.session_state.user_role = "admin"
+                        st.success("Logged in successfully!")
+                    else:
+                        st.error("Invalid username or password.")
+
+    # Sidebar filters (visible to all users)
+    st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 20px 0;">', unsafe_allow_html=True)
+    st.markdown('<h3 style="color: #3730a3; font-weight: 500;">⚙️ Filters</h3>', unsafe_allow_html=True)
+
+# Load saved data if no new upload
+if df is None:
+    may_df = load_data(MAY_FILE_PATH, "May") if os.path.exists(MAY_FILE_PATH) else None
+    june_df = load_data(JUNE_FILE_PATH, "June") if os.path.exists(JUNE_FILE_PATH) else None
+    df_list = [df for df in [may_df, june_df] if df is not None]
+    if df_list:
+        df = pd.concat(df_list, ignore_index=True)
+        st.info("Loaded saved May and/or June data.")
 
 # If no uploaded or saved files, use sample data
-if may_df is None and june_df is None:
+if df is None:
     data = {
         'Item Category': ['Electronics', 'Appliances'] * 12,
         'BDM': ['BDM1'] * 24,
@@ -248,78 +286,19 @@ if may_df is None and june_df is None:
         'TotalSoldPrice': [48239177/2, 48239177/2, 48239177/2, 48239177/2, 1200000, 1300000] * 4,
         'WarrantyPrice': [300619/2, 300619/2, 300619/2, 300619/2, 6420, 6955] * 4,
         'TotalCount': [5286, 5286, 5286, 5286, 1200, 1300] * 4,
-        'WarrantyCount': [483, 483, 483, 483, 60, 65] * 4
+        'WarrantyCount': [483, 483, 483, 483, 60, 65] * 4,
+        'Month': ['May'] * 12 + ['June'] * 12
     }
-    may_df = pd.DataFrame(data).copy()
-    may_df['Month'] = "May"
-    may_df['Conversion% (Count)'] = (may_df['WarrantyCount'] / may_df['TotalCount'] * 100).round(2)
-    may_df['Conversion% (Price)'] = (may_df['WarrantyPrice'] / may_df['TotalSoldPrice'] * 100).round(2)
-    
-    june_data = {
-        'Item Category': ['Electronics', 'Appliances'] * 12,
-        'BDM': ['BDM1'] * 24,
-        'RBM': ['MAHESH'] * 12 + ['RENJITH'] * 12,
-        'Store': ['Palakkad FUTURE', 'Store B'] * 6 + ['Kannur FUTURE', 'Store C'] * 6,
-        'Staff Name': ['Staff1', 'Staff2'] * 12,
-        'TotalSoldPrice': [51435759/2, 51435759/2, 51435759/2, 51435759/2, 1260000, 1365000] * 4,
-        'WarrantyPrice': [175000, 175000, 150000, 150000, 6000, 6500] * 2 + [175000, 175000, 150000, 150000, 6000, 6500] * 2,
-        'TotalCount': [5450, 5450, 5450, 5450, 1236, 1339] * 4,
-        'WarrantyCount': [448, 448, 448, 448, 90, 98] * 2 + [495, 495, 495, 495, 112, 121] * 2
-    }
-    june_df = pd.DataFrame(june_data).copy()
-    june_df['Month'] = "June"
-    june_df['Conversion% (Count)'] = (june_df['WarrantyCount'] / june_df['TotalCount'] * 100).round(2)
-    june_df['Conversion% (Price)'] = (june_df['WarrantyPrice'] / june_df['TotalSoldPrice'] * 100).round(2)
-    st.warning("Using sample data for May and June, calibrated for MAHESH (May: 9.15% Count, 1.07% Value; June: 8.23% Count, 1.26% Value) and RENJITH (May: 5.00% Count; June: 9.06% Count).")
-
-# Combine datasets
-if may_df is not None and june_df is not None:
-    df = pd.concat([may_df, june_df], ignore_index=True)
-elif may_df is not None:
-    df = may_df
-elif june_df is not None:
-    df = june_df
-else:
-    st.error("At least one file must be uploaded or sample data must be valid.")
-    st.stop()
+    df = pd.DataFrame(data)
+    df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
+    df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).round(2)
+    st.warning("Using sample data for May and June, calibrated for MAHESH (May: 9.15% Count, 1.07% Value; June: 9.15% Count, 1.07% Value) and RENJITH (May: 5.00% Count; June: 5.00% Count).")
 
 # Ensure Month column is categorical
 df['Month'] = pd.Categorical(df['Month'], categories=['May', 'June'], ordered=True)
 
-# Sidebar content
+# Define filters after df is loaded to avoid NameError
 with st.sidebar:
-    st.markdown('<h2 style="color: #3730a3; font-weight: 600;">🔍 Dashboard Controls</h2>', unsafe_allow_html=True)
-    st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 10px 0;">', unsafe_allow_html=True)
-    
-    # Admin-specific controls
-    if st.session_state.user_role == "admin":
-        if st.session_state.show_upload_form:
-            if not st.session_state.authenticated:
-                with st.form("login_form"):
-                    st.markdown('<h3 style="color: #3730a3; font-weight: 500;">🔐 Admin Login</h3>', unsafe_allow_html=True)
-                    username = st.text_input("Username", placeholder="Enter your username")
-                    password = st.text_input("Password", type="password", placeholder="Enter your password")
-                    submit = st.form_submit_button("Login", type="primary")
-                    if submit:
-                        if authenticate(username, password):
-                            st.session_state.authenticated = True
-                            st.session_state.user_role = "admin"
-                            st.success("Logged in successfully!")
-                        else:
-                            st.error("Invalid username or password.")
-            else:
-                st.markdown('<h3 style="color: #3730a3; font-weight: 500;">📁 Upload Data Files</h3>', unsafe_allow_html=True)
-                st.button("Logout", on_click=lambda: st.session_state.update(authenticated=False, show_upload_form=False, user_role="non-admin"))
-        else:
-            if st.session_state.authenticated:
-                st.button("Upload New Data", on_click=lambda: st.session_state.update(show_upload_form=True))
-                st.button("Logout", on_click=lambda: st.session_state.update(authenticated=False, show_upload_form=False, user_role="non-admin"))
-            else:
-                st.button("Admin Login", on_click=lambda: st.session_state.update(show_upload_form=True))
-
-    # Sidebar filters (visible to all users)
-    st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 20px 0;">', unsafe_allow_html=True)
-    st.markdown('<h3 style="color: #3730a3; font-weight: 500;">⚙️ Filters</h3>', unsafe_allow_html=True)
     bdm_options = ['All'] + sorted(df['BDM'].unique().tolist())
     rbm_options = ['All'] + sorted(df['RBM'].unique().tolist())
     store_options = ['All'] + sorted(df['Store'].unique().tolist())
