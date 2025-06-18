@@ -6,7 +6,126 @@ import hashlib
 from datetime import datetime
 
 # Streamlit page configuration
-st.set_page_config(page_title="Warranty Conversion Dashboard", layout="wide")
+st.set_page_config(page_title="Warranty Conversion Dashboard", layout="wide", initial_sidebar_state="expanded")
+
+# Note: Run this app with `streamlit run dashboard.py` to avoid ScriptRunContext warnings and ensure proper functionality.
+
+# Custom CSS for professional and attractive styling
+st.markdown("""
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500&display=swap');
+
+        body {
+            font-family: 'Poppins', 'Inter', sans-serif;
+        }
+        .stApp {
+            background: linear-gradient(135deg, #dbeafe 0%, #f9fafb 100%);
+            padding: 20px;
+        }
+        .main-header {
+            color: #3730a3;
+            font-size: 2.8em;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 30px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+        .subheader {
+            color: #3730a3;
+            font-size: 1.6em;
+            font-weight: 600;
+            margin-top: 25px;
+            margin-bottom: 15px;
+        }
+        .stButton>button {
+            background: linear-gradient(90deg, #3730a3, #4338ca);
+            color: white;
+            border-radius: 10px;
+            padding: 12px 24px;
+            font-weight: 500;
+            border: none;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+        }
+        .stButton>button:hover {
+            background: linear-gradient(90deg, #06b6d4, #22d3ee);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+            transform: translateY(-1px);
+        }
+        .stTextInput>div>input {
+            border-radius: 8px;
+            border: 1px solid #d1d5db;
+            padding: 12px;
+            background-color: #ffffff;
+            transition: border-color 0.3s ease;
+        }
+        .stTextInput>div>input:focus {
+            border-color: #06b6d4;
+            box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.1);
+        }
+        .stSelectbox>div>div>select {
+            border-radius: 8px;
+            border: 1px solid #d1d5db;
+            padding: 12px;
+            background-color: #ffffff;
+            color: #1f2937;
+            transition: border-color 0.3s ease;
+        }
+        .stSelectbox>div>div>select:focus {
+            border-color: #06b6d4;
+            box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.1);
+        }
+        .stCheckbox label {
+            color: #1f2937;
+            font-weight: 500;
+        }
+        .sidebar .sidebar-content {
+            background: #ffffff;
+            border-right: 2px solid transparent;
+            border-image: linear-gradient(to bottom, #3730a3, #06b6d4) 1;
+            padding: 25px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        }
+        .sidebar .stForm {
+            background-color: #f3f4f6;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+        .stDataFrame {
+            border-radius: 12px;
+            overflow: hidden;
+            background-color: #ffffff;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            padding: 10px;
+        }
+        .stPlotlyChart {
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            background-color: #ffffff;
+            padding: 10px;
+        }
+        .stSuccess, .stWarning, .stInfo, .stError {
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+        }
+        .stExpander {
+            border-radius: 10px;
+            background-color: #ffffff;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+            margin-bottom: 15px;
+        }
+        .stExpander>summary {
+            background: linear-gradient(to right, #f3f4f6, #ffffff);
+            padding: 12px;
+            font-weight: 500;
+            color: #3730a3;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 # Create data directory if it doesn't exist
 DATA_DIR = "data"
@@ -25,7 +144,6 @@ def hash_password(password):
 def initialize_credentials():
     if not os.path.exists(USER_CREDENTIALS_FILE):
         with open(USER_CREDENTIALS_FILE, 'w') as f:
-            # Default admin credentials: username=admin, password=admin123
             f.write(f"admin:{hash_password('admin123')}\n")
 
 initialize_credentials()
@@ -45,34 +163,14 @@ def authenticate(username, password):
     credentials = load_credentials()
     return username in credentials and credentials[username] == hash_password(password)
 
-# Title
-st.title("📊 Warranty Conversion Analysis Dashboard")
-
 # Session state for authentication
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
-if 'show_login' not in st.session_state:
-    st.session_state.show_login = False
+if 'show_upload_form' not in st.session_state:
+    st.session_state.show_upload_form = False
 
-# Login form
-if not st.session_state.authenticated:
-    if st.button("Login as Admin"):
-        st.session_state.show_login = True
-
-    if st.session_state.show_login:
-        with st.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            submit = st.form_submit_button("Login")
-            if submit:
-                if authenticate(username, password):
-                    st.session_state.authenticated = True
-                    st.session_state.show_login = False
-                    st.success("Logged in successfully!")
-                else:
-                    st.error("Invalid username or password.")
-else:
-    st.button("Logout", on_click=lambda: st.session_state.update(authenticated=False))
+# Main dashboard
+st.markdown('<h1 class="main-header">📊 Warranty Conversion Analysis Dashboard</h1>', unsafe_allow_html=True)
 
 # Load data function
 required_columns = ['Item Category', 'BDM', 'RBM', 'Store', 'Staff Name', 'TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']
@@ -99,7 +197,6 @@ def load_data(file, month, file_path=None):
         df['Month'] = month
         df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
         df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).where(df['TotalSoldPrice'] > 0, 0).round(2)
-        # Save uploaded file as CSV if file is provided and not a file path
         if file_path and not isinstance(file, str):
             if file.name.endswith('.csv'):
                 with open(file_path, 'wb') as f:
@@ -112,22 +209,13 @@ def load_data(file, month, file_path=None):
         st.error(f"Error loading {month} file: {str(e)}")
         return None
 
-# File uploaders (only visible to authenticated users)
+# Handle new uploads (only if authenticated)
 may_df = None
 june_df = None
-
-if st.session_state.authenticated:
-    st.subheader("Upload Data Files")
-    col1, col2 = st.columns(2)
-    with col1:
-        may_file = st.file_uploader("Upload May data file", type=["csv", "xlsx", "xls"], key="may")
-    with col2:
-        june_file = st.file_uploader("Upload June data file", type=["csv", "xlsx", "xls"], key="june")
-
-    # Handle new uploads
-    if may_file:
+if st.session_state.authenticated and st.session_state.show_upload_form:
+    if 'may_file' in locals() and may_file:
         may_df = load_data(may_file, "May", MAY_FILE_PATH)
-    if june_file:
+    if 'june_file' in locals() and june_file:
         june_df = load_data(june_file, "June", JUNE_FILE_PATH)
 
 # Load from saved files if no new uploads
@@ -189,21 +277,56 @@ else:
 # Ensure Month column is categorical
 df['Month'] = pd.Categorical(df['Month'], categories=['May', 'June'], ordered=True)
 
-# Sidebar filters
-st.sidebar.header("🔍 Filters")
-bdm_options = ['All'] + sorted(df['BDM'].unique().tolist())
-rbm_options = ['All'] + sorted(df['RBM'].unique().tolist())
-store_options = ['All'] + sorted(df['Store'].unique().tolist())
-category_options = ['All'] + sorted(df['Item Category'].unique().tolist())
-staff_options = ['All'] + sorted(df['Staff Name'].unique().tolist())
+# Sidebar content
+with st.sidebar:
+    st.markdown('<h2 style="color: #3730a3; font-weight: 600;">🔍 Dashboard Controls</h2>', unsafe_allow_html=True)
+    st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 10px 0;">', unsafe_allow_html=True)
+    
+    # Show login form or uploaders based on authentication and user action
+    if st.session_state.show_upload_form:
+        if not st.session_state.authenticated:
+            with st.form("login_form"):
+                st.markdown('<h3 style="color: #3730a3; font-weight: 500;">🔐 Admin Login</h3>', unsafe_allow_html=True)
+                username = st.text_input("Username", placeholder="Enter your username")
+                password = st.text_input("Password", type="password", placeholder="Enter your password")
+                submit = st.form_submit_button("Login", type="primary")
+                if submit:
+                    if authenticate(username, password):
+                        st.session_state.authenticated = True
+                        st.success("Logged in successfully!")
+                    else:
+                        st.error("Invalid username or password.")
+        else:
+            st.markdown('<h3 style="color: #3730a3; font-weight: 500;">📁 Upload Data Files</h3>', unsafe_allow_html=True)
+            col1, col2 = st.columns(2)
+            with col1:
+                may_file = st.file_uploader("May Data", type=["csv", "xlsx", "xls"], key="may")
+            with col2:
+                june_file = st.file_uploader("June Data", type=["csv", "xlsx", "xls"], key="june")
+            st.button("Logout", on_click=lambda: st.session_state.update(authenticated=False, show_upload_form=False))
+    else:
+        if st.session_state.authenticated:
+            st.button("Upload New Data", on_click=lambda: st.session_state.update(show_upload_form=True))
+            st.button("Logout", on_click=lambda: st.session_state.update(authenticated=False, show_upload_form=False))
+        else:
+            st.button("Upload New Data", on_click=lambda: st.session_state.update(show_upload_form=True))
 
-selected_bdm = st.sidebar.selectbox("BDM", bdm_options, index=0)
-selected_rbm = st.sidebar.selectbox("RBM", rbm_options, index=0)
-selected_store = st.sidebar.selectbox("Store", store_options, index=0)
-selected_category = st.sidebar.selectbox("Item Category", category_options, index=0)
-selected_staff = st.sidebar.selectbox("Staff", staff_options, index=0)
-future_filter = st.sidebar.checkbox("Show only FUTURE stores")
-decreased_rbm_filter = st.sidebar.checkbox("Show only RBMs with decreased count conversion")
+    # Sidebar filters
+    st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 20px 0;">', unsafe_allow_html=True)
+    st.markdown('<h3 style="color: #3730a3; font-weight: 500;">⚙️ Filters</h3>', unsafe_allow_html=True)
+    bdm_options = ['All'] + sorted(df['BDM'].unique().tolist())
+    rbm_options = ['All'] + sorted(df['RBM'].unique().tolist())
+    store_options = ['All'] + sorted(df['Store'].unique().tolist())
+    category_options = ['All'] + sorted(df['Item Category'].unique().tolist())
+    staff_options = ['All'] + sorted(df['Staff Name'].unique().tolist())
+
+    selected_bdm = st.selectbox("BDM", bdm_options, index=0)
+    selected_rbm = st.selectbox("RBM", rbm_options, index=0)
+    selected_store = st.selectbox("Store", store_options, index=0)
+    selected_category = st.selectbox("Item Category", category_options, index=0)
+    selected_staff = st.selectbox("Staff", staff_options, index=0)
+    future_filter = st.checkbox("Show only FUTURE stores")
+    decreased_rbm_filter = st.checkbox("Show only RBMs with decreased count conversion")
 
 # Apply filters
 filtered_df = df.copy()
@@ -226,25 +349,25 @@ if filtered_df.empty:
 
 # Debug: Display MAHESH or RENJITH data
 if selected_rbm in ['MAHESH', 'RENJITH']:
-    st.subheader(f"Debug: Raw Data for RBM {selected_rbm}")
-    rbm_data = filtered_df[filtered_df['RBM'] == selected_rbm][['Month', 'TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount', 'Conversion% (Count)', 'Conversion% (Price)']]
-    st.write(rbm_data)
-    rbm_summary = rbm_data.groupby('Month').agg({
-        'TotalSoldPrice': 'sum',
-        'WarrantyPrice': 'sum',
-        'TotalCount': 'sum',
-        'WarrantyCount': 'sum'
-    }).reset_index()
-    rbm_summary['Conversion% (Count)'] = (rbm_summary['WarrantyCount'] / rbm_summary['TotalCount'] * 100).round(2)
-    rbm_summary['Conversion% (Price)'] = (rbm_summary['WarrantyPrice'] / rbm_summary['TotalSoldPrice'] * 100).round(2)
-    st.write(f"Aggregated Metrics for {selected_rbm}:")
-    st.write(rbm_summary)
+    with st.expander(f"Debug: Raw Data for RBM {selected_rbm}", expanded=False):
+        rbm_data = filtered_df[filtered_df['RBM'] == selected_rbm][['Month', 'TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount', 'Conversion% (Count)', 'Conversion% (Price)']]
+        st.write(rbm_data)
+        rbm_summary = rbm_data.groupby('Month').agg({
+            'TotalSoldPrice': 'sum',
+            'WarrantyPrice': 'sum',
+            'TotalCount': 'sum',
+            'WarrantyCount': 'sum'
+        }).reset_index()
+        rbm_summary['Conversion% (Count)'] = (rbm_summary['WarrantyCount'] / rbm_summary['TotalCount'] * 100).round(2)
+        rbm_summary['Conversion% (Price)'] = (rbm_summary['WarrantyPrice'] / rbm_summary['TotalSoldPrice'] * 100).round(2)
+        st.write(f"Aggregated Metrics for {selected_rbm}:")
+        st.write(rbm_summary)
 
 # Main dashboard
-st.header("📈 Performance Comparison: May vs June")
+st.markdown('<h2 class="subheader">📈 Performance Comparison: May vs June</h2>', unsafe_allow_html=True)
 
 # KPI comparison
-st.subheader("Overall KPIs")
+st.markdown('<h3 class="subheader">Overall KPIs</h3>', unsafe_allow_html=True)
 col1, col2, col3, col4 = st.columns(4)
 
 may_data = filtered_df[filtered_df['Month'] == 'May']
@@ -278,7 +401,7 @@ with col4:
     st.metric("Value Conversion (June)", f"{june_value_conversion:.2f}%", delta=f"{june_value_conversion - may_value_conversion:.2f}%")
 
 # Store Performance Comparison
-st.subheader("🏬 Store Performance Comparison")
+st.markdown('<h3 class="subheader">🏬 Store Performance Comparison</h3>', unsafe_allow_html=True)
 store_summary = filtered_df.groupby(['Store', 'Month']).agg({
     'TotalSoldPrice': 'sum',
     'WarrantyPrice': 'sum',
@@ -320,11 +443,21 @@ fig_store = px.bar(store_summary,
                    y='Conversion% (Count)', 
                    color='Month', 
                    barmode='group', 
-                   title='Store Count Conversion: May vs June')
+                   title='Store Count Conversion: May vs June',
+                   template='plotly_white',
+                   color_discrete_sequence=['#3730a3', '#06b6d4'])
+fig_store.update_layout(
+    plot_bgcolor='rgba(0,0,0,0)',
+    paper_bgcolor='rgba(0,0,0,0)',
+    font=dict(family="Poppins, Inter, sans-serif", size=12, color="#1f2937"),
+    showlegend=True,
+    xaxis=dict(showgrid=False, tickangle=45),
+    yaxis=dict(showgrid=True, gridcolor='#e5e7eb')
+)
 st.plotly_chart(fig_store, use_container_width=True)
 
 # RBM Performance Comparison
-st.subheader("👥 RBM Performance Comparison")
+st.markdown('<h3 class="subheader">👥 RBM Performance Comparison</h3>', unsafe_allow_html=True)
 rbm_summary = filtered_df.groupby(['RBM', 'Month']).agg({
     'TotalSoldPrice': 'sum',
     'WarrantyPrice': 'sum',
@@ -343,7 +476,6 @@ rbm_pivot['Count Conversion Change (%)'] = (rbm_pivot['June Conversion% (Count)'
 rbm_pivot['Value Conversion Change (%)'] = (rbm_pivot['June Conversion% (Price)'] - rbm_pivot['May Conversion% (Price)']).round(2)
 rbm_pivot = rbm_pivot.sort_values('Count Conversion Change (%)', ascending=False)
 
-# Apply decreased RBM filter
 if decreased_rbm_filter:
     rbm_pivot = rbm_pivot[rbm_pivot['Count Conversion Change (%)'] < 0]
     if rbm_pivot.empty:
@@ -368,11 +500,21 @@ fig_rbm = px.bar(rbm_summary,
                  y='Conversion% (Count)', 
                  color='Month', 
                  barmode='group', 
-                 title='RBM Count Conversion: May vs June')
+                 title='RBM Count Conversion: May vs June',
+                 template='plotly_white',
+                 color_discrete_sequence=['#3730a3', '#06b6d4'])
+fig_rbm.update_layout(
+    plot_bgcolor='rgba(0,0,0,0)',
+    paper_bgcolor='rgba(0,0,0,0)',
+    font=dict(family="Poppins, Inter, sans-serif", size=12, color="#1f2937"),
+    showlegend=True,
+    xaxis=dict(showgrid=False, tickangle=45),
+    yaxis=dict(showgrid=True, gridcolor='#e5e7eb')
+)
 st.plotly_chart(fig_rbm, use_container_width=True)
 
 # Item Category Performance Comparison
-st.subheader("📦 Item Category Performance Comparison")
+st.markdown('<h3 class="subheader">📦 Item Category Performance Comparison</h3>', unsafe_allow_html=True)
 category_summary = filtered_df.groupby(['Item Category', 'Month']).agg({
     'TotalSoldPrice': 'sum',
     'WarrantyPrice': 'sum',
@@ -411,179 +553,197 @@ if not category_summary.empty:
                           y='Conversion% (Count)', 
                           color='Month', 
                           barmode='group', 
-                          title='Item Category Count Conversion: May vs June')
+                          title='Item Category Count Conversion: May vs June',
+                          template='plotly_white',
+                          color_discrete_sequence=['#3730a3', '#06b6d4'])
+    fig_category.update_layout(
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(family="Poppins, Inter, sans-serif", size=12, color="#1f2937"),
+        showlegend=True,
+        xaxis=dict(showgrid=False, tickangle=45),
+        yaxis=dict(showgrid=True, gridcolor='#e5e7eb')
+    )
     st.plotly_chart(fig_category, use_container_width=True)
 else:
     st.warning("No item category data available with current filters.")
     category_pivot = pd.DataFrame()
 
 # Insights
-st.header("💡 Insights & Recommendations")
+st.markdown('<h2 class="subheader">💡 Insights & Recommendations</h2>', unsafe_allow_html=True)
 
 # Overall performance change
-st.subheader("Overall Performance Change")
-if june_count_conversion > may_count_conversion:
-    st.success(f"Count Conversion improved from {may_count_conversion:.2f}% in May to {june_count_conversion:.2f}% in June.")
-else:
-    st.warning(f"Count Conversion declined from {may_count_conversion:.2f}% in May to {june_count_conversion:.2f}% in June.")
-if june_value_conversion > may_value_conversion:
-    st.success(f"Value Conversion improved from {may_value_conversion:.2f}% in May to {june_value_conversion:.2f}% in June.")
-else:
-    st.warning(f"Value Conversion declined from {may_value_conversion:.2f}% in May to {june_value_conversion:.2f}% in June.")
+with st.expander("Overall Performance Change", expanded=True):
+    if june_count_conversion > may_count_conversion:
+        st.success(f"Count Conversion improved from {may_count_conversion:.2f}% in May to {june_count_conversion:.2f}% in June.")
+    else:
+        st.warning(f"Count Conversion declined from {may_count_conversion:.2f}% in May to {june_count_conversion:.2f}% in June.")
+    if june_value_conversion > may_value_conversion:
+        st.success(f"Value Conversion improved from {may_value_conversion:.2f}% in May to {june_value_conversion:.2f}% in June.")
+    else:
+        st.warning(f"Value Conversion declined from {may_value_conversion:.2f}% in May to {june_value_conversion:.2f}% in June.")
 
 # Store-Level Warranty Sales Analysis
-st.subheader("📉 Store-Level Warranty Sales Analysis")
-store_warranty = filtered_df.groupby(['Store', 'Month'])['WarrantyPrice'].sum().reset_index()
-store_pivot = store_warranty.pivot_table(index='Store', columns='Month', values='WarrantyPrice', aggfunc='first').fillna(0)
-store_pivot['Change (₹)'] = store_pivot['June'] - store_pivot['May']
-store_pivot['Change (%)'] = ((store_pivot['June'] - store_pivot['May']) / store_pivot['May'] * 100).where(store_pivot['May'] > 0, 0).round(2)
-store_pivot = store_pivot.sort_values('Change (%)', ascending=False).reset_index()
+with st.expander("Store-Level Warranty Sales Analysis", expanded=True):
+    store_warranty = filtered_df.groupby(['Store', 'Month'])['WarrantyPrice'].sum().reset_index()
+    store_pivot = store_warranty.pivot_table(index='Store', columns='Month', values='WarrantyPrice', aggfunc='first').fillna(0)
+    store_pivot['Change (₹)'] = store_pivot['June'] - store_pivot['May']
+    store_pivot['Change (%)'] = ((store_pivot['June'] - store_pivot['May']) / store_pivot['May'] * 100).where(store_pivot['May'] > 0, 0).round(2)
+    store_pivot = store_pivot.sort_values('Change (%)', ascending=False).reset_index()
 
-if not store_pivot.empty:
-    st.write("Warranty sales comparison between May and June for each store:")
-    display_df = store_pivot[['Store', 'May', 'June', 'Change (₹)', 'Change (%)']]
-    display_df.columns = ['Store', 'May Warranty Sales (₹)', 'June Warranty Sales (₹)', 'Change (₹)', 'Change (%)']
-    st.dataframe(display_df.style.format({
-        'May Warranty Sales (₹)': '₹{:.0f}',
-        'June Warranty Sales (₹)': '₹{:.0f}',
-        'Change (₹)': '₹{:.0f}',
-        'Change (%)': '{:.2f}%'
-    }).applymap(highlight_change, subset=['Change (₹)', 'Change (%)']), use_container_width=True)
+    if not store_pivot.empty:
+        st.write("Warranty sales comparison between May and June for each store:")
+        display_df = store_pivot[['Store', 'May', 'June', 'Change (₹)', 'Change (%)']]
+        display_df.columns = ['Store', 'May Warranty Sales (₹)', 'June Warranty Sales (₹)', 'Change (₹)', 'Change (%)']
+        st.dataframe(display_df.style.format({
+            'May Warranty Sales (₹)': '₹{:.0f}',
+            'June Warranty Sales (₹)': '₹{:.0f}',
+            'Change (₹)': '₹{:.0f}',
+            'Change (%)': '{:.2f}%'
+        }).applymap(highlight_change, subset=['Change (₹)', 'Change (%)']), use_container_width=True)
 
-    # Reasons for decreases
-    st.write("**Reasons for Warranty Sales Decreases:**")
-    decreased_stores = store_pivot[store_pivot['Change (%)'] < 0]
-    if not decreased_stores.empty:
-        category_warranty = filtered_df.groupby(['Store', 'Month', 'Item Category'])['WarrantyPrice'].sum().reset_index()
-        category_pivot_warranty = category_warranty.pivot_table(index=['Store', 'Item Category'], columns='Month', values='WarrantyPrice', aggfunc='first').fillna(0)
-        category_pivot_warranty['Change (₹)'] = category_pivot_warranty['June'] - category_pivot_warranty['May']
-        
-        store_metrics = filtered_df.groupby(['Store', 'Month']).agg({
-            'TotalSoldPrice': 'sum',
-            'WarrantyCount': 'sum',
-            'TotalCount': 'sum'
-        }).reset_index()
-        metrics_pivot = store_metrics.pivot_table(index='Store', columns='Month', values=['TotalSoldPrice', 'WarrantyCount', 'TotalCount'], aggfunc='first').fillna(0)
-        metrics_pivot.columns = [f"{col[1]} {col[0]}" for col in metrics_pivot.columns]
-        
-        for _, row in decreased_stores.iterrows():
-            store = row['Store']
-            change_amt = row['Change (₹)']
-            change_pct = row['Change (%)']
+        st.write("**Reasons for Warranty Sales Decreases:**")
+        decreased_stores = store_pivot[store_pivot['Change (%)'] < 0]
+        if not decreased_stores.empty:
+            category_warranty = filtered_df.groupby(['Store', 'Month', 'Item Category'])['WarrantyPrice'].sum().reset_index()
+            category_pivot_warranty = category_warranty.pivot_table(index=['Store', 'Item Category'], columns='Month', values='WarrantyPrice', aggfunc='first').fillna(0)
+            category_pivot_warranty['Change (₹)'] = category_pivot_warranty['June'] - category_pivot_warranty['May']
             
-            st.write(f"**{store} (Decrease: ₹{abs(change_amt):,.0f}, {change_pct:.2f}%):**")
-            reasons = []
+            store_metrics = filtered_df.groupby(['Store', 'Month']).agg({
+                'TotalSoldPrice': 'sum',
+                'WarrantyCount': 'sum',
+                'TotalCount': 'sum'
+            }).reset_index()
+            metrics_pivot = store_metrics.pivot_table(index='Store', columns='Month', values=['TotalSoldPrice', 'WarrantyCount', 'TotalCount'], aggfunc='first').fillna(0)
+            metrics_pivot.columns = [f"{col[1]} {col[0]}" for col in metrics_pivot.columns]
             
-            store_cat = category_pivot_warranty.loc[store] if store in category_pivot_warranty.index.get_level_values(0) else pd.DataFrame()
-            if not store_cat.empty:
-                decreased_cats = store_cat[store_cat['Change (₹)'] < 0]
-                for cat, cat_row in decreased_cats.iterrows():
-                    reasons.append(f"{cat} warranty sales decreased by ₹{abs(cat_row['Change (₹)']):,.0f}.")
-            
-            if store in metrics_pivot.index:
-                may_total_sales = metrics_pivot.loc[store, 'May TotalSoldPrice']
-                june_total_sales = metrics_pivot.loc[store, 'June TotalSoldPrice']
-                if june_total_sales > may_total_sales:
-                    reasons.append(f"Total sales increased (₹{june_total_sales:,.0f} vs. ₹{may_total_sales:,.0f}), potentially diluting warranty sales.")
+            for _, row in decreased_stores.iterrows():
+                store = row['Store']
+                change_amt = row['Change (₹)']
+                change_pct = row['Change (%)']
                 
-                may_warranty_count = metrics_pivot.loc[store, 'May WarrantyCount']
-                june_warranty_count = metrics_pivot.loc[store, 'June WarrantyCount']
-                if june_warranty_count < may_warranty_count:
-                    reasons.append(f"Fewer warranty units sold ({june_warranty_count:.0f} vs. {may_warranty_count:.0f}).")
-            
-            if reasons:
-                for reason in reasons:
-                    st.write(f"- {reason}")
-                st.write("**Recommendations:**")
-                st.write("- Review sales strategies for underperforming product categories.")
-                st.write("- Enhance staff training on warranty benefits.")
-                st.write("- Introduce targeted promotions for warranty products.")
-            else:
-                st.write("- No specific reasons identified; further analysis needed.")
+                st.write(f"**{store} (Decrease: ₹{abs(change_amt):,.0f}, {change_pct:.2f}%):**")
+                reasons = []
+                
+                store_cat = category_pivot_warranty.loc[store] if store in category_pivot_warranty.index.get_level_values(0) else pd.DataFrame()
+                if not store_cat.empty:
+                    decreased_cats = store_cat[store_cat['Change (₹)'] < 0]
+                    for cat, cat_row in decreased_cats.iterrows():
+                        reasons.append(f"{cat} warranty sales decreased by ₹{abs(cat_row['Change (₹)']):,.0f}.")
+                
+                if store in metrics_pivot.index:
+                    may_total_sales = metrics_pivot.loc[store, 'May TotalSoldPrice']
+                    june_total_sales = metrics_pivot.loc[store, 'June TotalSoldPrice']
+                    if june_total_sales > may_total_sales:
+                        reasons.append(f"Total sales increased (₹{june_total_sales:,.0f} vs. ₹{may_total_sales:,.0f}), potentially diluting warranty sales.")
+                    
+                    may_warranty_count = metrics_pivot.loc[store, 'May WarrantyCount']
+                    june_warranty_count = metrics_pivot.loc[store, 'June WarrantyCount']
+                    if june_warranty_count < may_warranty_count:
+                        reasons.append(f"Fewer warranty units sold ({june_warranty_count:.0f} vs. {may_warranty_count:.0f}).")
+                
+                if reasons:
+                    for reason in reasons:
+                        st.write(f"- {reason}")
+                    st.write("**Recommendations:**")
+                    st.write("- Review sales strategies for underperforming product categories.")
+                    st.write("- Enhance staff training on warranty benefits.")
+                    st.write("- Introduce targeted promotions for warranty products.")
+                else:
+                    st.write("- No specific reasons identified; further analysis needed.")
+        else:
+            st.info("No stores experienced a warranty sales decrease with current filters.")
     else:
-        st.info("No stores experienced a warranty sales decrease with current filters.")
-else:
-    st.info("No warranty sales data available for stores with current filters.")
+        st.info("No warranty sales data available for stores with current filters.")
 
 # Significant Changes
-st.subheader("Significant Changes")
-significant_stores = store_conv_pivot[abs(store_conv_pivot['Count Conversion Change (%)']) > 2]
-if not significant_stores.empty:
-    st.write("**Stores with Significant Count Conversion Changes:**")
-    for store in significant_stores.index:
-        change = float(store_conv_pivot.loc[store, 'Count Conversion Change (%)'])
-        st.write(f"- {store}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
+with st.expander("Significant Changes", expanded=True):
+    significant_stores = store_conv_pivot[abs(store_conv_pivot['Count Conversion Change (%)']) > 2]
+    if not significant_stores.empty:
+        st.write("**Stores with Significant Count Conversion Changes:**")
+        for store in significant_stores.index:
+            change = float(store_conv_pivot.loc[store, 'Count Conversion Change (%)'])
+            st.write(f"- {store}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
 
-significant_rbms = rbm_pivot[abs(rbm_pivot['Count Conversion Change (%)']) > 2]
-if not significant_rbms.empty:
-    st.write("**RBMs with Significant Count Conversion Changes:**")
-    for rbm in significant_rbms.index:
-        change = float(rbm_pivot.loc[rbm, 'Count Conversion Change (%)'])
-        st.write(f"- {rbm}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
+    significant_rbms = rbm_pivot[abs(rbm_pivot['Count Conversion Change (%)']) > 2]
+    if not significant_rbms.empty:
+        st.write("**RBMs with Significant Count Conversion Changes:**")
+        for rbm in significant_rbms.index:
+            change = float(rbm_pivot.loc[rbm, 'Count Conversion Change (%)'])
+            st.write(f"- {rbm}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
 
-if not category_pivot.empty:
-    significant_categories = category_pivot[abs(category_pivot['Count Conversion Change (%)']) > 2]
-    if not significant_categories.empty:
-        st.write("**Item Categories with Significant Count Conversion Changes:**")
-        for category in significant_categories.index:
-            change = float(category_pivot.loc[category, 'Count Conversion Change (%)'])
-            st.write(f"- {category}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
-else:
-    st.info("No significant item category changes with current filters.")
+    if not category_pivot.empty:
+        significant_categories = category_pivot[abs(category_pivot['Count Conversion Change (%)']) > 2]
+        if not significant_categories.empty:
+            st.write("**Item Categories with Significant Count Conversion Changes:**")
+            for category in significant_categories.index:
+                change = float(category_pivot.loc[category, 'Count Conversion Change (%)'])
+                st.write(f"- {category}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
+    else:
+        st.info("No significant item category changes with current filters.")
 
 # Low performers in June
-avg_count_conversion = june_count_conversion
-low_performers = store_summary[store_summary['Month'] == 'June']
-low_performers = low_performers[low_performers['Conversion% (Count)'] < avg_count_conversion]
-if not low_performers.empty:
-    st.subheader("🚨 Improvement Opportunities (June)")
-    st.write(f"These stores in June have below-average count conversion (avg: {avg_count_conversion:.2f}%):")
-    for _, row in low_performers.iterrows():
-        st.write(f"- {row['Store']}: {row['Conversion% (Count)']:.2f}%")
-    
-    st.write("**Recommendations:**")
-    st.write("1. Provide additional training on warranty benefits")
-    st.write("2. Create targeted promotions")
-    st.write("3. Review staffing and sales strategies")
+with st.expander("Improvement Opportunities (June)", expanded=True):
+    avg_count_conversion = june_count_conversion
+    low_performers = store_summary[store_summary['Month'] == 'June']
+    low_performers = low_performers[low_performers['Conversion% (Count)'] < avg_count_conversion]
+    if not low_performers.empty:
+        st.write(f"These stores in June have below-average count conversion (avg: {avg_count_conversion:.2f}%):")
+        for _, row in low_performers.iterrows():
+            st.write(f"- {row['Store']}: {row['Conversion% (Count)']:.2f}%")
+        
+        st.write("**Recommendations:**")
+        st.write("1. Provide additional training on warranty benefits")
+        st.write("2. Create targeted promotions")
+        st.write("3. Review staffing and sales strategies")
 
 # FUTURE stores analysis
 if future_filter or any('FUTURE' in store for store in filtered_df['Store'].unique()):
-    st.subheader("🏢 FUTURE Stores Analysis")
-    future_stores = filtered_df[filtered_df['Store'].str.contains('FUTURE', case=True)]
-    if not future_stores.empty:
-        future_summary = future_stores.groupby('Month').agg({
-            'TotalSoldPrice': 'sum',
-            'WarrantyPrice': 'sum',
-            'TotalCount': 'sum',
-            'WarrantyCount': 'sum'
-        }).reset_index()
-        future_summary['Conversion% (Count)'] = (future_summary['WarrantyCount'] / future_summary['TotalCount'] * 100).round(2)
-        future_summary['Conversion% (Price)'] = (future_summary['WarrantyPrice'] / future_summary['TotalSoldPrice'] * 100).round(2)
-        
-        may_future = future_summary[future_summary['Month'] == 'May']
-        june_future = future_summary[future_summary['Month'] == 'June']
-        
-        may_future_count = may_future['Conversion% (Count)'].iloc[0] if not may_future.empty else 0
-        june_future_count = june_future['Conversion% (Count)'].iloc[0] if not june_future.empty else 0
-        st.write(f"Average count conversion in FUTURE stores (May): {may_future_count:.2f}%")
-        st.write(f"Average count conversion in FUTURE stores (June): {june_future_count:.2f}%")
-        if june_future_count < may_future_count:
-            st.warning("FUTURE stores count conversion declined in June.")
-            st.write("**Recommendations:**")
-            st.write("- Conduct store-specific training")
-            st.write("- Analyze customer demographics")
+    with st.expander("FUTURE Stores Analysis", expanded=True):
+        future_stores = filtered_df[filtered_df['Store'].str.contains('FUTURE', case=True)]
+        if not future_stores.empty:
+            future_summary = future_stores.groupby('Month').agg({
+                'TotalSoldPrice': 'sum',
+                'WarrantyPrice': 'sum',
+                'TotalCount': 'sum',
+                'WarrantyCount': 'sum'
+            }).reset_index()
+            future_summary['Conversion% (Count)'] = (future_summary['WarrantyCount'] / future_summary['TotalCount'] * 100).round(2)
+            future_summary['Conversion% (Price)'] = (future_summary['WarrantyPrice'] / future_summary['TotalSoldPrice'] * 100).round(2)
+            
+            may_future = future_summary[future_summary['Month'] == 'May']
+            june_future = future_summary[future_summary['Month'] == 'June']
+            
+            may_future_count = may_future['Conversion% (Count)'].iloc[0] if not may_future.empty else 0
+            june_future_count = june_future['Conversion% (Count)'].iloc[0] if not june_future.empty else 0
+            st.write(f"Average count conversion in FUTURE stores (May): {may_future_count:.2f}%")
+            st.write(f"Average count conversion in FUTURE stores (June): {june_future_count:.2f}%")
+            if june_future_count < may_future_count:
+                st.warning("FUTURE stores count conversion declined in June.")
+                st.write("**Recommendations:**")
+                st.write("- Conduct store-specific training")
+                st.write("- Analyze customer demographics")
+            else:
+                st.success("FUTURE stores count conversion improved or remained stable in June!")
         else:
-            st.success("FUTURE stores count conversion improved or remained stable in June!")
-    else:
-        st.info("No FUTURE stores in current selection")
+            st.info("No FUTURE stores in current selection")
 
 # Correlation Analysis
-st.subheader("🔗 Correlation Analysis (June)")
+st.markdown('<h3 class="subheader">🔗 Correlation Analysis (June)</h3>', unsafe_allow_html=True)
 corr_matrix = filtered_df[filtered_df['Month'] == 'June'][['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']].corr()
 fig_corr = px.imshow(
     corr_matrix,
     text_auto=True,
     title="Correlation Matrix of Key Metrics (June)",
-    template='plotly_dark'
+    template='plotly_white',
+    color_continuous_scale='Blues',
+    zmin=-1,
+    zmax=1
+)
+fig_corr.update_layout(
+    plot_bgcolor='rgba(0,0,0,0)',
+    paper_bgcolor='rgba(0,0,0,0)',
+    font=dict(family="Poppins, Inter, sans-serif", size=12, color="#1f2937"),
+    showlegend=True
 )
 st.plotly_chart(fig_corr, use_container_width=True)
