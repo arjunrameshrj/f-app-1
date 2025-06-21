@@ -8,7 +8,7 @@ from datetime import datetime
 # Streamlit page configuration
 st.set_page_config(page_title="Warranty Conversion Dashboard", layout="wide", initial_sidebar_state="expanded")
 
-# Custom CSS for professional styling
+# Custom CSS for professional styling with centered metrics table and bold colored headings
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500&display=swap');
@@ -167,9 +167,8 @@ def load_credentials():
     if os.path.exists(USER_CREDENTIALS_FILE):
         with open(USER_CREDENTIALS_FILE, 'r') as f:
             for line in f:
-                if ':' in line:
-                    username, hashed_pwd = line.strip().split(':')
-                    credentials[username] = hashed_pwd
+                username, hashed_pwd = line.strip().split(':')
+                credentials[username] = hashed_pwd
     return credentials
 
 # Authentication function
@@ -184,18 +183,6 @@ if 'show_upload_form' not in st.session_state:
     st.session_state.show_upload_form = False
 if 'user_role' not in st.session_state:
     st.session_state.user_role = "non-admin"
-if 'data_loaded' not in st.session_state:
-    st.session_state.data_loaded = False
-if 'filters' not in st.session_state:
-    st.session_state.filters = {
-        'bdm': 'All',
-        'rbm': 'All',
-        'store': 'All',
-        'category': 'All',
-        'staff': 'All',
-        'future_filter': False,
-        'decreased_rbm_filter': False
-    }
 
 # Main dashboard
 st.markdown('<h1 class="main-header">📊 Warranty Conversion Analysis Dashboard</h1>', unsafe_allow_html=True)
@@ -203,17 +190,15 @@ st.markdown('<h1 class="main-header">📊 Warranty Conversion Analysis Dashboard
 # Load data function
 required_columns = ['Item Category', 'BDM', 'RBM', 'Store', 'Staff Name', 'TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']
 
+@st.cache_data
 def load_data(file, month, file_path=None):
     try:
         if isinstance(file, str):  # File path
             df = pd.read_csv(file)
         elif file.name.endswith('.csv'):  # Uploaded CSV
             df = pd.read_csv(file)
-        elif file.name.endswith(('.xlsx', '.xls')):  # Uploaded Excel
+        else:  # Uploaded Excel
             df = pd.read_excel(file, engine='openpyxl')
-        else:
-            st.error(f"Unsupported file format for {month}. Please upload CSV or Excel files.")
-            return None
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             st.error(f"Missing columns in {month} file: {', '.join(missing_columns)}")
@@ -228,8 +213,12 @@ def load_data(file, month, file_path=None):
         df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).where(df['TotalSoldPrice'] > 0, 0).round(2)
         df['Month'] = month
         if file_path and not isinstance(file, str):
-            df.to_csv(file_path, index=False)
-            st.success(f"{month} data saved successfully at {file_path}.")
+            if file.name.endswith('.csv'):
+                with open(file_path, 'wb') as f:
+                    f.write(file.getvalue())
+            else:
+                df.to_csv(file_path, index=False)
+            st.success(f"{month} data saved successfully and available to all users.")
         return df
     except Exception as e:
         st.error(f"Error loading {month} file: {str(e)}")
@@ -257,10 +246,10 @@ with st.sidebar:
             if authenticate("admin", upload_password):
                 may_df = load_data(may_file, "May", MAY_FILE_PATH) if may_file else None
                 june_df = load_data(june_file, "June", JUNE_FILE_PATH) if june_file else None
-                df_list = [df for df in [may_df, june_df] if df is not None]
-                if df_list:
-                    df = pd.concat(df_list, ignore_index=True)
-                    st.session_state.data_loaded = True
+                if may_df is not None or june_df is not None:
+                    df_list = [df for df in [may_df, june_df] if df is not None]
+                    if df_list:
+                        df = pd.concat(df_list, ignore_index=True)
             else:
                 st.error("Invalid password. Upload failed.")
             if not may_file and not june_file:
@@ -286,15 +275,18 @@ with st.sidebar:
                     else:
                         st.error("Invalid username or password.")
 
-# Load saved data if no new upload and data not yet loaded
-if df is None and not st.session_state.data_loaded:
+    # Sidebar filters
+    st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 20px 0;">', unsafe_allow_html=True)
+    st.markdown('<h3 style="color: #3730a3; font-weight: 500;">⚙️ Filters</h3>', unsafe_allow_html=True)
+
+# Load saved data if no new upload
+if df is None:
     may_df = load_data(MAY_FILE_PATH, "May") if os.path.exists(MAY_FILE_PATH) else None
     june_df = load_data(JUNE_FILE_PATH, "June") if os.path.exists(JUNE_FILE_PATH) else None
     df_list = [df for df in [may_df, june_df] if df is not None]
     if df_list:
         df = pd.concat(df_list, ignore_index=True)
         st.info("Loaded saved May and/or June data.")
-        st.session_state.data_loaded = True
 
 # If no uploaded or saved files, use sample data
 if df is None:
@@ -314,45 +306,30 @@ if df is None:
     df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
     df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).round(2)
     st.warning("Using sample data for May and June, calibrated for MAHESH (May: 9.15% Count, 1.07% Value; June: 9.15% Count, 1.07% Value) and RENJITH (May: 5.00% Count; June: 5.00% Count).")
-    st.session_state.data_loaded = True
 
 # Ensure Month column is categorical
 df['Month'] = pd.Categorical(df['Month'], categories=['May', 'June'], ordered=True)
 
 # Define filters after df is loaded
 with st.sidebar:
-    st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 20px 0;">', unsafe_allow_html=True)
-    st.markdown('<h3 style="color: #3730a3; font-weight: 500;">⚙️ Filters</h3>', unsafe_allow_html=True)
-
     bdm_options = ['All'] + sorted(df['BDM'].unique().tolist())
     rbm_options = ['All'] + sorted(df['RBM'].unique().tolist())
     store_options = ['All'] + sorted(df['Store'].unique().tolist())
     category_options = ['All'] + sorted(df['Item Category'].unique().tolist())
 
-    selected_bdm = st.selectbox("BDM", bdm_options, index=bdm_options.index(st.session_state.filters['bdm']) if st.session_state.filters['bdm'] in bdm_options else 0)
-    selected_rbm = st.selectbox("RBM", rbm_options, index=rbm_options.index(st.session_state.filters['rbm']) if st.session_state.filters['rbm'] in rbm_options else 0)
-    selected_store = st.selectbox("Store", store_options, index=store_options.index(st.session_state.filters['store']) if st.session_state.filters['store'] in store_options else 0)
-    selected_category = st.selectbox("Item Category", category_options, index=category_options.index(st.session_state.filters['category']) if st.session_state.filters['category'] in category_options else 0)
+    selected_bdm = st.selectbox("BDM", bdm_options, index=0)
+    selected_rbm = st.selectbox("RBM", rbm_options, index=0)
+    selected_store = st.selectbox("Store", store_options, index=0)
+    selected_category = st.selectbox("Item Category", category_options, index=0)
 
     if selected_rbm != 'All':
         staff_options = ['All'] + sorted(df[df['RBM'] == selected_rbm]['Staff Name'].unique().tolist())
     else:
         staff_options = ['All'] + sorted(df['Staff Name'].unique().tolist())
-    selected_staff = st.selectbox("Staff", staff_options, index=staff_options.index(st.session_state.filters['staff']) if st.session_state.filters['staff'] in staff_options else 0)
+    selected_staff = st.selectbox("Staff", staff_options, index=0)
 
-    future_filter = st.checkbox("Show only FUTURE stores", value=st.session_state.filters['future_filter'])
-    decreased_rbm_filter = st.checkbox("Show only RBMs with decreased count conversion", value=st.session_state.filters['decreased_rbm_filter'])
-
-    # Update session state filters
-    st.session_state.filters.update({
-        'bdm': selected_bdm,
-        'rbm': selected_rbm,
-        'store': selected_store,
-        'category': selected_category,
-        'staff': selected_staff,
-        'future_filter': future_filter,
-        'decreased_rbm_filter': decreased_rbm_filter
-    })
+    future_filter = st.checkbox("Show only FUTURE stores")
+    decreased_rbm_filter = st.checkbox("Show only RBMs with decreased count conversion")
 
 # Apply filters
 filtered_df = df.copy()
