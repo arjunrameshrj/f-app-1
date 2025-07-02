@@ -211,6 +211,7 @@ def load_data(file, month, file_path=None):
             df[numeric_cols] = df[numeric_cols].fillna(0)
         df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
         df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).where(df['TotalSoldPrice'] > 0, 0).round(2)
+        df['AHSP'] = (df['WarrantyPrice'] / df['WarrantyCount']).where(df['WarrantyCount'] > 0, 0).round(2)
         df['Month'] = month
         if file_path and not isinstance(file, str):
             if file.name.endswith('.csv'):
@@ -305,6 +306,7 @@ if df is None:
     df = pd.DataFrame(data)
     df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
     df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).round(2)
+    df['AHSP'] = (df['WarrantyPrice'] / df['WarrantyCount']).where(df['WarrantyCount'] > 0, 0).round(2)
     st.warning("Using sample data for May and June, calibrated for MAHESH (May: 9.15% Count, 1.07% Value; June: 9.15% Count, 1.07% Value) and RENJITH (May: 5.00% Count; June: 5.00% Count).")
 
 # Ensure Month column is categorical
@@ -350,29 +352,14 @@ if filtered_df.empty:
     st.warning("No data matches your filters. Adjust your selection.")
     st.stop()
 
-# Debug: Display MAHESH or RENJITH data
-if selected_rbm in ['MAHESH', 'RENJITH']:
-    with st.expander(f"Debug: Raw Data for RBM {selected_rbm}", expanded=False):
-        rbm_data = filtered_df[filtered_df['RBM'] == selected_rbm][['Month', 'TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount', 'Conversion% (Count)', 'Conversion% (Price)']]
-        st.write(rbm_data)
-        rbm_summary = rbm_data.groupby('Month').agg({
-            'TotalSoldPrice': 'sum',
-            'WarrantyPrice': 'sum',
-            'TotalCount': 'sum',
-            'WarrantyCount': 'sum'
-        }).reset_index()
-        rbm_summary['Conversion% (Count)'] = (rbm_summary['WarrantyCount'] / rbm_summary['TotalCount'] * 100).round(2)
-        rbm_summary['Conversion% (Price)'] = (rbm_summary['WarrantyPrice'] / rbm_summary['TotalSoldPrice'] * 100).round(2)
-        st.write(f"Aggregated Metrics for {selected_rbm}:")
-        st.write(rbm_summary)
-
 # Main dashboard
 st.markdown('<h2 class="subheader">📈 Performance Comparison: May vs June</h2>', unsafe_allow_html=True)
 
-# KPI comparison (excluding Total Sales)
+# KPI comparison - UPDATED SECTION WITH CONSISTENT CALCULATIONS
 st.markdown('<h3 class="subheader">Overall KPIs</h3>', unsafe_allow_html=True)
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
+# Calculate metrics from the raw data (not averages)
 may_data = filtered_df[filtered_df['Month'] == 'May']
 june_data = filtered_df[filtered_df['Month'] == 'June']
 
@@ -382,6 +369,7 @@ may_total_warranty_units = may_data['WarrantyCount'].sum()
 may_total_sales = may_data['TotalSoldPrice'].sum()
 may_value_conversion = (may_total_warranty / may_total_sales * 100) if may_total_sales > 0 else 0
 may_count_conversion = (may_total_warranty_units / may_total_units * 100) if may_total_units > 0 else 0
+may_ahsp = (may_total_warranty / may_total_warranty_units) if may_total_warranty_units > 0 else 0
 
 june_total_warranty = june_data['WarrantyPrice'].sum()
 june_total_units = june_data['TotalCount'].sum()
@@ -389,53 +377,89 @@ june_total_warranty_units = june_data['WarrantyCount'].sum()
 june_total_sales = june_data['TotalSoldPrice'].sum()
 june_value_conversion = (june_total_warranty / june_total_sales * 100) if june_total_sales > 0 else 0
 june_count_conversion = (june_total_warranty_units / june_total_units * 100) if june_total_units > 0 else 0
+june_ahsp = (june_total_warranty / june_total_warranty_units) if june_total_warranty_units > 0 else 0
 
 with col1:
     st.metric("Warranty Sales (May)", f"₹{may_total_warranty:,.0f}")
-    st.metric("Warranty Sales (June)", f"₹{june_total_warranty:,.0f}", delta=f"{((june_total_warranty - may_total_warranty) / may_total_warranty * 100):.2f}%" if may_total_warranty > 0 else "N/A")
+    st.metric("Warranty Sales (June)", f"₹{june_total_warranty:,.0f}", 
+              delta=f"{((june_total_warranty - may_total_warranty) / may_total_warranty * 100):.2f}%" if may_total_warranty > 0 else "N/A")
+
 with col2:
     st.metric("Count Conversion (May)", f"{may_count_conversion:.2f}%")
-    st.metric("Count Conversion (June)", f"{june_count_conversion:.2f}%", delta=f"{june_count_conversion - may_count_conversion:.2f}%")
+    st.metric("Count Conversion (June)", f"{june_count_conversion:.2f}%", 
+              delta=f"{june_count_conversion - may_count_conversion:.2f}%")
+
 with col3:
     st.metric("Value Conversion (May)", f"{may_value_conversion:.2f}%")
-    st.metric("Value Conversion (June)", f"{june_value_conversion:.2f}%", delta=f"{june_value_conversion - may_value_conversion:.2f}%")
+    st.metric("Value Conversion (June)", f"{june_value_conversion:.2f}%", 
+              delta=f"{june_value_conversion - may_value_conversion:.2f}%")
 
-# Store Performance Comparison
+with col4:
+    st.metric("AHSP (May)", f"₹{may_ahsp:,.2f}")
+    st.metric("AHSP (June)", f"₹{june_ahsp:,.2f}", 
+              delta=f"₹{june_ahsp - may_ahsp:,.2f}" if may_ahsp > 0 else "N/A")
+
+# Store Performance Comparison - UPDATED TO MATCH KPI CALCULATIONS
 st.markdown('<h3 class="subheader">🏬 Store Performance Comparison</h3>', unsafe_allow_html=True)
+
+# First calculate store-level aggregates
 store_summary = filtered_df.groupby(['Store', 'Month']).agg({
     'TotalSoldPrice': 'sum',
     'WarrantyPrice': 'sum',
     'TotalCount': 'sum',
     'WarrantyCount': 'sum'
 }).reset_index()
+
+# Calculate metrics for each store-month combination
 store_summary['Conversion% (Count)'] = (store_summary['WarrantyCount'] / store_summary['TotalCount'] * 100).round(2)
 store_summary['Conversion% (Price)'] = (store_summary['WarrantyPrice'] / store_summary['TotalSoldPrice'] * 100).round(2)
 store_summary['AHSP'] = (store_summary['WarrantyPrice'] / store_summary['WarrantyCount']).where(store_summary['WarrantyCount'] > 0, 0).round(2)
 
+# Create pivot table for comparison
 store_conv_pivot = store_summary.pivot_table(index='Store', columns='Month', values=['Conversion% (Count)', 'Conversion% (Price)', 'AHSP'], aggfunc='first').fillna(0)
 store_conv_pivot.columns = [f"{col[1]} {col[0]}" for col in store_conv_pivot.columns]
+
+# Ensure all required columns exist
 for col in ['May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP']:
     if col not in store_conv_pivot.columns:
         store_conv_pivot[col] = 0
+
+# Calculate changes
 store_conv_pivot['Count Conversion Change (%)'] = (store_conv_pivot['June Conversion% (Count)'] - store_conv_pivot['May Conversion% (Count)']).round(2)
 store_conv_pivot['Value Conversion Change (%)'] = (store_conv_pivot['June Conversion% (Price)'] - store_conv_pivot['May Conversion% (Price)']).round(2)
 store_conv_pivot['AHSP Change (%)'] = ((store_conv_pivot['June AHSP'] - store_conv_pivot['May AHSP']) / store_conv_pivot['May AHSP'] * 100).where(store_conv_pivot['May AHSP'] > 0, 0).round(2)
 
-# Calculate totals
+# Sort by count conversion change
+store_conv_pivot = store_conv_pivot.sort_values('Count Conversion Change (%)', ascending=False)
+
+# Calculate TOTAL row using the same method as KPIs (sum of all, then calculate metrics)
+total_may = store_summary[store_summary['Month'] == 'May'][['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']].sum()
+total_june = store_summary[store_summary['Month'] == 'June'][['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']].sum()
+
 total_row = pd.DataFrame({
     'Store': ['Total'],
-    'May Conversion% (Count)': [store_summary[store_summary['Month'] == 'May']['Conversion% (Count)'].mean().round(2)],
-    'June Conversion% (Count)': [store_summary[store_summary['Month'] == 'June']['Conversion% (Count)'].mean().round(2)],
-    'May Conversion% (Price)': [store_summary[store_summary['Month'] == 'May']['Conversion% (Price)'].mean().round(2)],
-    'June Conversion% (Price)': [store_summary[store_summary['Month'] == 'June']['Conversion% (Price)'].mean().round(2)],
-    'May AHSP': [store_summary[store_summary['Month'] == 'May']['AHSP'].mean().round(2)],
-    'June AHSP': [store_summary[store_summary['Month'] == 'June']['AHSP'].mean().round(2)],
-    'Count Conversion Change (%)': [(store_summary[store_summary['Month'] == 'June']['Conversion% (Count)'].mean() - store_summary[store_summary['Month'] == 'May']['Conversion% (Count)'].mean()).round(2)],
-    'Value Conversion Change (%)': [(store_summary[store_summary['Month'] == 'June']['Conversion% (Price)'].mean() - store_summary[store_summary['Month'] == 'May']['Conversion% (Price)'].mean()).round(2)],
-    'AHSP Change (%)': [((store_summary[store_summary['Month'] == 'June']['AHSP'].mean() - store_summary[store_summary['Month'] == 'May']['AHSP'].mean()) / store_summary[store_summary['Month'] == 'May']['AHSP'].mean() * 100).round(2) if store_summary[store_summary['Month'] == 'May']['AHSP'].mean() > 0 else 0]
+    'May Conversion% (Count)': [(total_may['WarrantyCount'] / total_may['TotalCount'] * 100).round(2) if total_may['TotalCount'] > 0 else 0],
+    'June Conversion% (Count)': [(total_june['WarrantyCount'] / total_june['TotalCount'] * 100).round(2) if total_june['TotalCount'] > 0 else 0],
+    'May Conversion% (Price)': [(total_may['WarrantyPrice'] / total_may['TotalSoldPrice'] * 100).round(2) if total_may['TotalSoldPrice'] > 0 else 0],
+    'June Conversion% (Price)': [(total_june['WarrantyPrice'] / total_june['TotalSoldPrice'] * 100).round(2) if total_june['TotalSoldPrice'] > 0 else 0],
+    'May AHSP': [(total_may['WarrantyPrice'] / total_may['WarrantyCount']).round(2) if total_may['WarrantyCount'] > 0 else 0],
+    'June AHSP': [(total_june['WarrantyPrice'] / total_june['WarrantyCount']).round(2) if total_june['WarrantyCount'] > 0 else 0],
+    'Count Conversion Change (%)': [
+        (total_june['WarrantyCount'] / total_june['TotalCount'] * 100 - total_may['WarrantyCount'] / total_may['TotalCount'] * 100).round(2) 
+        if total_june['TotalCount'] > 0 and total_may['TotalCount'] > 0 else 0
+    ],
+    'Value Conversion Change (%)': [
+        (total_june['WarrantyPrice'] / total_june['TotalSoldPrice'] * 100 - total_may['WarrantyPrice'] / total_may['TotalSoldPrice'] * 100).round(2) 
+        if total_june['TotalSoldPrice'] > 0 and total_may['TotalSoldPrice'] > 0 else 0
+    ],
+    'AHSP Change (%)': [
+        ((total_june['WarrantyPrice'] / total_june['WarrantyCount'] - total_may['WarrantyPrice'] / total_may['WarrantyCount']) / 
+         (total_may['WarrantyPrice'] / total_may['WarrantyCount']) * 100).round(2) 
+        if total_may['WarrantyCount'] > 0 and total_june['WarrantyCount'] > 0 else 0
+    ]
 })
 
-store_conv_pivot = store_conv_pivot.sort_values('Count Conversion Change (%)', ascending=False)
+# Prepare display dataframe
 store_display = store_conv_pivot.reset_index()
 store_display = store_display[['Store', 'May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP', 'Count Conversion Change (%)', 'Value Conversion Change (%)', 'AHSP Change (%)']]
 store_display = pd.concat([store_display, total_row], ignore_index=True)
@@ -458,8 +482,11 @@ st.dataframe(store_display.style.format({
     'Value Conv Change (%)': '{:.2f}%',
     'AHSP Change (%)': '{:.2f}%',
     'Total Change (%)': '{:.2f}%'
-}).applymap(highlight_change, subset=['Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)', 'Total Change (%)']).set_properties(**{'font-weight': 'bold'}, subset=pd.IndexSlice[store_display.index[-1], :]), use_container_width=True)
+}).applymap(highlight_change, subset=['Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)', 'Total Change (%)'])
+.set_properties(**{'font-weight': 'bold'}, subset=pd.IndexSlice[store_display.index[-1], :]), 
+use_container_width=True)
 
+# Visualization
 fig_store = px.bar(store_summary, 
                    x='Store', 
                    y='Conversion% (Count)', 
@@ -478,24 +505,35 @@ fig_store.update_layout(
 )
 st.plotly_chart(fig_store, use_container_width=True)
 
-# RBM Performance Comparison
+# RBM Performance Comparison - UPDATED TO MATCH KPI CALCULATIONS
 st.markdown('<h3 class="subheader">👥 RBM Performance Comparison</h3>', unsafe_allow_html=True)
+
+# First calculate RBM-level aggregates
 rbm_summary = filtered_df.groupby(['RBM', 'Month']).agg({
     'TotalSoldPrice': 'sum',
     'WarrantyPrice': 'sum',
     'TotalCount': 'sum',
     'WarrantyCount': 'sum'
 }).reset_index()
+
+# Calculate metrics for each RBM-month combination
 rbm_summary['Conversion% (Count)'] = (rbm_summary['WarrantyCount'] / rbm_summary['TotalCount'] * 100).round(2)
 rbm_summary['Conversion% (Price)'] = (rbm_summary['WarrantyPrice'] / rbm_summary['TotalSoldPrice'] * 100).round(2)
+rbm_summary['AHSP'] = (rbm_summary['WarrantyPrice'] / rbm_summary['WarrantyCount']).where(rbm_summary['WarrantyCount'] > 0, 0).round(2)
 
-rbm_pivot = rbm_summary.pivot_table(index='RBM', columns='Month', values=['Conversion% (Count)', 'Conversion% (Price)'], aggfunc='first').fillna(0)
+# Create pivot table for comparison
+rbm_pivot = rbm_summary.pivot_table(index='RBM', columns='Month', values=['Conversion% (Count)', 'Conversion% (Price)', 'AHSP'], aggfunc='first').fillna(0)
 rbm_pivot.columns = [f"{col[1]} {col[0]}" for col in rbm_pivot.columns]
-for col in ['May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)']:
+
+# Ensure all required columns exist
+for col in ['May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP']:
     if col not in rbm_pivot.columns:
         rbm_pivot[col] = 0
+
+# Calculate changes
 rbm_pivot['Count Conversion Change (%)'] = (rbm_pivot['June Conversion% (Count)'] - rbm_pivot['May Conversion% (Count)']).round(2)
 rbm_pivot['Value Conversion Change (%)'] = (rbm_pivot['June Conversion% (Price)'] - rbm_pivot['May Conversion% (Price)']).round(2)
+rbm_pivot['AHSP Change (%)'] = ((rbm_pivot['June AHSP'] - rbm_pivot['May AHSP']) / rbm_pivot['May AHSP'] * 100).where(rbm_pivot['May AHSP'] > 0, 0).round(2)
 rbm_pivot = rbm_pivot.sort_values('Count Conversion Change (%)', ascending=False)
 
 if decreased_rbm_filter:
@@ -503,9 +541,10 @@ if decreased_rbm_filter:
     if rbm_pivot.empty:
         st.warning("No RBMs with decreased count conversion match the filters.")
 
+# Prepare display dataframe
 rbm_display = rbm_pivot.reset_index()
-rbm_display = rbm_display[['RBM', 'May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'Count Conversion Change (%)', 'Value Conversion Change (%)']]
-rbm_display.columns = ['RBM', 'May Count Conv (%)', 'June Count Conv (%)', 'May Value Conv (%)', 'June Value Conv (%)', 'Count Conv Change (%)', 'Value Conv Change (%)']
+rbm_display = rbm_display[['RBM', 'May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP', 'Count Conversion Change (%)', 'Value Conversion Change (%)', 'AHSP Change (%)']]
+rbm_display.columns = ['RBM', 'May Count Conv (%)', 'June Count Conv (%)', 'May Value Conv (%)', 'June Value Conv (%)', 'May AHSP (₹)', 'June AHSP (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)']
 rbm_display = rbm_display.fillna(0)
 
 st.dataframe(rbm_display.style.format({
@@ -513,10 +552,14 @@ st.dataframe(rbm_display.style.format({
     'June Count Conv (%)': '{:.2f}%',
     'May Value Conv (%)': '{:.2f}%',
     'June Value Conv (%)': '{:.2f}%',
+    'May AHSP (₹)': '₹{:.2f}',
+    'June AHSP (₹)': '₹{:.2f}',
     'Count Conv Change (%)': '{:.2f}%',
-    'Value Conv Change (%)': '{:.2f}%'
-}).applymap(highlight_change, subset=['Count Conv Change (%)', 'Value Conv Change (%)']), use_container_width=True)
+    'Value Conv Change (%)': '{:.2f}%',
+    'AHSP Change (%)': '{:.2f}%'
+}).applymap(highlight_change, subset=['Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)']), use_container_width=True)
 
+# Visualization
 fig_rbm = px.bar(rbm_summary, 
                  x='RBM', 
                  y='Conversion% (Count)', 
@@ -535,30 +578,42 @@ fig_rbm.update_layout(
 )
 st.plotly_chart(fig_rbm, use_container_width=True)
 
-# Item Category Performance Comparison
+# Item Category Performance Comparison - UPDATED TO MATCH KPI CALCULATIONS
 st.markdown('<h3 class="subheader">📦 Item Category Performance Comparison</h3>', unsafe_allow_html=True)
+
+# First calculate category-level aggregates
 category_summary = filtered_df.groupby(['Item Category', 'Month']).agg({
     'TotalSoldPrice': 'sum',
     'WarrantyPrice': 'sum',
     'TotalCount': 'sum',
     'WarrantyCount': 'sum'
 }).reset_index()
+
+# Calculate metrics for each category-month combination
 category_summary['Conversion% (Count)'] = (category_summary['WarrantyCount'] / category_summary['TotalCount'] * 100).round(2)
 category_summary['Conversion% (Price)'] = (category_summary['WarrantyPrice'] / category_summary['TotalSoldPrice'] * 100).round(2)
+category_summary['AHSP'] = (category_summary['WarrantyPrice'] / category_summary['WarrantyCount']).where(category_summary['WarrantyCount'] > 0, 0).round(2)
 
 if not category_summary.empty:
-    category_pivot = category_summary.pivot_table(index='Item Category', columns='Month', values=['Conversion% (Count)', 'Conversion% (Price)'], aggfunc='first').fillna(0)
+    # Create pivot table for comparison
+    category_pivot = category_summary.pivot_table(index='Item Category', columns='Month', values=['Conversion% (Count)', 'Conversion% (Price)', 'AHSP'], aggfunc='first').fillna(0)
     category_pivot.columns = [f"{col[1]} {col[0]}" for col in category_pivot.columns]
-    for col in ['May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)']:
+
+    # Ensure all required columns exist
+    for col in ['May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP']:
         if col not in category_pivot.columns:
             category_pivot[col] = 0
+
+    # Calculate changes
     category_pivot['Count Conversion Change (%)'] = (category_pivot['June Conversion% (Count)'] - category_pivot['May Conversion% (Count)']).round(2)
     category_pivot['Value Conversion Change (%)'] = (category_pivot['June Conversion% (Price)'] - category_pivot['May Conversion% (Price)']).round(2)
+    category_pivot['AHSP Change (%)'] = ((category_pivot['June AHSP'] - category_pivot['May AHSP']) / category_pivot['May AHSP'] * 100).where(category_pivot['May AHSP'] > 0, 0).round(2)
     category_pivot = category_pivot.sort_values('Count Conversion Change (%)', ascending=False)
 
+    # Prepare display dataframe
     category_display = category_pivot.reset_index()
-    category_display = category_display[['Item Category', 'May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'Count Conversion Change (%)', 'Value Conversion Change (%)']]
-    category_display.columns = ['Item Category', 'May Count Conv (%)', 'June Count Conv (%)', 'May Value Conv (%)', 'June Value Conv (%)', 'Count Conv Change (%)', 'Value Conv Change (%)']
+    category_display = category_display[['Item Category', 'May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP', 'Count Conversion Change (%)', 'Value Conversion Change (%)', 'AHSP Change (%)']]
+    category_display.columns = ['Item Category', 'May Count Conv (%)', 'June Count Conv (%)', 'May Value Conv (%)', 'June Value Conv (%)', 'May AHSP (₹)', 'June AHSP (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)']
     category_display = category_display.fillna(0)
 
     st.dataframe(category_display.style.format({
@@ -566,10 +621,14 @@ if not category_summary.empty:
         'June Count Conv (%)': '{:.2f}%',
         'May Value Conv (%)': '{:.2f}%',
         'June Value Conv (%)': '{:.2f}%',
+        'May AHSP (₹)': '₹{:.2f}',
+        'June AHSP (₹)': '₹{:.2f}',
         'Count Conv Change (%)': '{:.2f}%',
-        'Value Conv Change (%)': '{:.2f}%'
-    }).applymap(highlight_change, subset=['Count Conv Change (%)', 'Value Conv Change (%)']), use_container_width=True)
+        'Value Conv Change (%)': '{:.2f}%',
+        'AHSP Change (%)': '{:.2f}%'
+    }).applymap(highlight_change, subset=['Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)']), use_container_width=True)
 
+    # Visualization
     fig_category = px.bar(category_summary, 
                           x='Item Category', 
                           y='Conversion% (Count)', 
@@ -597,6 +656,7 @@ st.markdown('<h2 class="subheader">💡 Insights & Recommendations</h2>', unsafe
 # Define targets
 TARGET_COUNT_CONVERSION = 15.0
 TARGET_VALUE_CONVERSION = 2.0
+TARGET_AHSP = 1000.0  # Example target, adjust as needed
 
 # Overall performance change and target comparison
 with st.expander("Overall Performance Change & Target Comparison", expanded=True):
@@ -617,6 +677,15 @@ with st.expander("Overall Performance Change & Target Comparison", expanded=True
         st.success(f"Value Conversion improved from {may_value_conversion:.2f}% in May to {june_value_conversion:.2f}% in June.")
     else:
         st.warning(f"Value Conversion declined from {may_value_conversion:.2f}% in May to {june_value_conversion:.2f}% in June.")
+
+    if june_ahsp >= TARGET_AHSP:
+        st.success(f"June AHSP (₹{june_ahsp:,.2f}) meets or exceeds target (₹{TARGET_AHSP:,.2f}).")
+    else:
+        st.warning(f"June AHSP (₹{june_ahsp:,.2f}) is below target (₹{TARGET_AHSP:,.2f}). Gap: ₹{TARGET_AHSP - june_ahsp:,.2f}.")
+    if june_ahsp > may_ahsp:
+        st.success(f"AHSP improved from ₹{may_ahsp:,.2f} in May to ₹{june_ahsp:,.2f} in June.")
+    else:
+        st.warning(f"AHSP declined from ₹{may_ahsp:,.2f} in May to ₹{june_ahsp:,.2f} in June.")
 
 # Store-Level Warranty Sales Analysis
 with st.expander("Store-Level Warranty Sales Analysis", expanded=True):
@@ -647,9 +716,10 @@ with st.expander("Store-Level Warranty Sales Analysis", expanded=True):
             store_metrics = filtered_df.groupby(['Store', 'Month']).agg({
                 'TotalSoldPrice': 'sum',
                 'WarrantyCount': 'sum',
-                'TotalCount': 'sum'
+                'TotalCount': 'sum',
+                'AHSP': 'mean'
             }).reset_index()
-            metrics_pivot = store_metrics.pivot_table(index='Store', columns='Month', values=['TotalSoldPrice', 'WarrantyCount', 'TotalCount'], aggfunc='first').fillna(0)
+            metrics_pivot = store_metrics.pivot_table(index='Store', columns='Month', values=['TotalSoldPrice', 'WarrantyCount', 'TotalCount', 'AHSP'], aggfunc='first').fillna(0)
             metrics_pivot.columns = [f"{col[1]} {col[0]}" for col in metrics_pivot.columns]
             
             for _, row in decreased_stores.iterrows():
@@ -676,6 +746,11 @@ with st.expander("Store-Level Warranty Sales Analysis", expanded=True):
                     june_warranty_count = metrics_pivot.loc[store, 'June WarrantyCount']
                     if june_warranty_count < may_warranty_count:
                         reasons.append(f"Fewer warranty units sold ({june_warranty_count:.0f} vs. {may_warranty_count:.0f}).")
+                    
+                    may_ahsp = metrics_pivot.loc[store, 'May AHSP']
+                    june_ahsp = metrics_pivot.loc[store, 'June AHSP']
+                    if june_ahsp < may_ahsp:
+                        reasons.append(f"Lower average warranty selling price (₹{june_ahsp:,.2f} vs. ₹{may_ahsp:,.2f}).")
                 
                 if reasons:
                     for reason in reasons:
@@ -721,6 +796,7 @@ with st.expander("Significant Changes", expanded=True):
 with st.expander("Improvement Opportunities (June)", expanded=True):
     low_count_performers = store_summary[(store_summary['Month'] == 'June') & (store_summary['Conversion% (Count)'] < TARGET_COUNT_CONVERSION)]
     low_value_performers = store_summary[(store_summary['Month'] == 'June') & (store_summary['Conversion% (Price)'] < TARGET_VALUE_CONVERSION)]
+    low_ahsp_performers = store_summary[(store_summary['Month'] == 'June') & (store_summary['AHSP'] < TARGET_AHSP)]
     
     if not low_count_performers.empty:
         st.write(f"These stores in June have below-target count conversion (target: {TARGET_COUNT_CONVERSION}%):")
@@ -736,11 +812,19 @@ with st.expander("Improvement Opportunities (June)", expanded=True):
     else:
         st.success(f"All stores meet or exceed the value conversion target ({TARGET_VALUE_CONVERSION}%) in June.")
 
-    if not low_count_performers.empty or not low_value_performers.empty:
+    if not low_ahsp_performers.empty:
+        st.write(f"These stores in June have below-target AHSP (target: ₹{TARGET_AHSP:,.2f}):")
+        for _, row in low_ahsp_performers.iterrows():
+            st.write(f"- {row['Store']}: ₹{row['AHSP']:,.2f}")
+    else:
+        st.success(f"All stores meet or exceed the AHSP target (₹{TARGET_AHSP:,.2f}) in June.")
+
+    if not low_count_performers.empty or not low_value_performers.empty or not low_ahsp_performers.empty:
         st.write("**Recommendations:**")
         st.write("1. Provide additional training on warranty benefits to improve conversion rates.")
         st.write("2. Create targeted promotions for high-value warranty products.")
         st.write("3. Review staffing and sales strategies in underperforming stores.")
+        st.write("4. Implement incentives for selling higher-value warranty packages.")
     else:
         st.write("**Recommendations:**")
         st.write("1. Maintain current strategies to sustain performance.")
@@ -755,7 +839,8 @@ if future_filter or any('FUTURE' in store for store in filtered_df['Store'].uniq
                 'TotalSoldPrice': 'sum',
                 'WarrantyPrice': 'sum',
                 'TotalCount': 'sum',
-                'WarrantyCount': 'sum'
+                'WarrantyCount': 'sum',
+                'AHSP': 'mean'
             }).reset_index()
             future_summary['Conversion% (Count)'] = (future_summary['WarrantyCount'] / future_summary['TotalCount'] * 100).round(2)
             future_summary['Conversion% (Price)'] = (future_summary['WarrantyPrice'] / future_summary['TotalSoldPrice'] * 100).round(2)
@@ -767,17 +852,22 @@ if future_filter or any('FUTURE' in store for store in filtered_df['Store'].uniq
             june_future_count = june_future['Conversion% (Count)'].iloc[0] if not june_future.empty else 0
             may_future_value = may_future['Conversion% (Price)'].iloc[0] if not may_future.empty else 0
             june_future_value = june_future['Conversion% (Price)'].iloc[0] if not june_future.empty else 0
+            may_future_ahsp = may_future['AHSP'].iloc[0] if not may_future.empty else 0
+            june_future_ahsp = june_future['AHSP'].iloc[0] if not june_future.empty else 0
             
             st.write(f"Average count conversion in FUTURE stores (May): {may_future_count:.2f}%")
             st.write(f"Average count conversion in FUTURE stores (June): {june_future_count:.2f}%")
             st.write(f"Average value conversion in FUTURE stores (May): {may_future_value:.2f}%")
             st.write(f"Average value conversion in FUTURE stores (June): {june_future_value:.2f}%")
+            st.write(f"Average AHSP in FUTURE stores (May): ₹{may_future_ahsp:,.2f}")
+            st.write(f"Average AHSP in FUTURE stores (June): ₹{june_future_ahsp:,.2f}")
             
-            if june_future_count < TARGET_COUNT_CONVERSION or june_future_value < TARGET_VALUE_CONVERSION:
+            if june_future_count < TARGET_COUNT_CONVERSION or june_future_value < TARGET_VALUE_CONVERSION or june_future_ahsp < TARGET_AHSP:
                 st.warning("FUTURE stores are below target in June.")
                 st.write("**Recommendations:**")
                 st.write("- Conduct store-specific training to boost conversion rates.")
                 st.write("- Analyze customer demographics for targeted promotions.")
+                st.write("- Review warranty pricing strategy to improve AHSP.")
             else:
                 st.success("FUTURE stores meet or exceed targets in June!")
         else:
@@ -785,7 +875,7 @@ if future_filter or any('FUTURE' in store for store in filtered_df['Store'].uniq
 
 # Correlation Analysis
 st.markdown('<h3 class="subheader">🔗 Correlation Analysis (June)</h3>', unsafe_allow_html=True)
-corr_matrix = filtered_df[filtered_df['Month'] == 'June'][['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']].corr()
+corr_matrix = filtered_df[filtered_df['Month'] == 'June'][['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount', 'AHSP']].corr()
 fig_corr = px.imshow(
     corr_matrix,
     text_auto=True,
