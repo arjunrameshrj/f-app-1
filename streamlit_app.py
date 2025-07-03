@@ -176,6 +176,30 @@ def authenticate(username, password):
     credentials = load_credentials()
     return username in credentials and credentials[username] == hash_password(password)
 
+# Function to map item categories to replacement warranty categories
+def map_to_replacement_category(item_category):
+    # Fan categories
+    fan_categories = ['CEILING FAN', 'PEDESTAL FAN', 'RECHARGABLE FAN', 'TABLE FAN', 'TOWER FAN', 'WALL FAN']
+    # Steamer categories
+    steamer_categories = ['GARMENTS STEAMER', 'STEAMER']
+    
+    if any(fan in item_category.upper() for fan in fan_categories):
+        return 'FAN'
+    elif 'MIXER GRINDER' in item_category.upper():
+        return 'MIXER GRINDER'
+    elif 'IRON BOX' in item_category.upper():
+        return 'IRON BOX'
+    elif 'ELECTRIC KETTLE' in item_category.upper():
+        return 'ELECTRIC KETTLE'
+    elif 'OTG' in item_category.upper():
+        return 'OTG'
+    elif any(steamer in item_category.upper() for steamer in steamer_categories):
+        return 'STEAMER'
+    elif 'INDUCTION' in item_category.upper():
+        return 'INDUCTION COOKER'
+    else:
+        return item_category  # Return original if not a replacement category
+
 # Session state initialization
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
@@ -199,20 +223,28 @@ def load_data(file, month, file_path=None):
             df = pd.read_csv(file)
         else:  # Uploaded Excel
             df = pd.read_excel(file, engine='openpyxl')
+        
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             st.error(f"Missing columns in {month} file: {', '.join(missing_columns)}")
             return None
+        
         numeric_cols = ['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+        
         if df[numeric_cols].isna().any().any():
             st.warning(f"Missing or invalid values in numeric columns for {month}. Filling with 0.")
             df[numeric_cols] = df[numeric_cols].fillna(0)
+        
+        # Add replacement category column
+        df['Replacement Category'] = df['Item Category'].apply(map_to_replacement_category)
+        
         df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
         df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).where(df['TotalSoldPrice'] > 0, 0).round(2)
         df['AHSP'] = (df['WarrantyPrice'] / df['WarrantyCount']).where(df['WarrantyCount'] > 0, 0).round(2)
         df['Month'] = month
+        
         if file_path and not isinstance(file, str):
             if file.name.endswith('.csv'):
                 with open(file_path, 'wb') as f:
@@ -220,6 +252,7 @@ def load_data(file, month, file_path=None):
             else:
                 df.to_csv(file_path, index=False)
             st.success(f"{month} data saved successfully and available to all users.")
+        
         return df
     except Exception as e:
         st.error(f"Error loading {month} file: {str(e)}")
@@ -279,6 +312,13 @@ with st.sidebar:
     # Sidebar filters
     st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 20px 0;">', unsafe_allow_html=True)
     st.markdown('<h3 style="color: #3730a3; font-weight: 500;">⚙️ Filters</h3>', unsafe_allow_html=True)
+    
+    # Replacement warranty filter
+    replacement_filter = st.checkbox("Show Replacement Warranty Categories Only")
+    
+    # Month filter
+    month_options = ['All', 'May', 'June']
+    selected_month = st.selectbox("Month", month_options, index=0)
 
 # Load saved data if no new upload
 if df is None:
@@ -289,40 +329,49 @@ if df is None:
         df = pd.concat(df_list, ignore_index=True)
         st.info("Loaded saved May and/or June data.")
 
-# If no uploaded or saved files, use sample data
+# If no uploaded or saved files, use sample data with replacement categories
 if df is None:
     data = {
-        'Item Category': ['Electronics', 'Appliances'] * 12,
+        'Item Category': ['CEILING FAN', 'PEDESTAL FAN', 'MIXER GRINDER', 'IRON BOX', 'ELECTRIC KETTLE', 'OTG', 'GARMENTS STEAMER', 'INDUCTION COOKER'] * 3,
         'BDM': ['BDM1'] * 24,
         'RBM': ['MAHESH'] * 12 + ['RENJITH'] * 12,
         'Store': ['Palakkad FUTURE', 'Store B'] * 6 + ['Kannur FUTURE', 'Store C'] * 6,
         'Staff Name': ['Staff1', 'Staff2'] * 12,
-        'TotalSoldPrice': [48239177/2, 48239177/2, 48239177/2, 48239177/2, 1200000, 1300000] * 4,
-        'WarrantyPrice': [300619/2, 300619/2, 300619/2, 300619/2, 6420, 6955] * 4,
-        'TotalCount': [5286, 5286, 5286, 5286, 1200, 1300] * 4,
-        'WarrantyCount': [483, 483, 483, 483, 60, 65] * 4,
-        'Month': ['May'] * 12 + ['June'] * 12
+        'TotalSoldPrice': [48239177/8, 48239177/8, 48239177/8, 48239177/8, 48239177/8, 48239177/8, 48239177/8, 48239177/8] * 3,
+        'WarrantyPrice': [300619/8, 300619/8, 300619/8, 300619/8, 300619/8, 300619/8, 300619/8, 300619/8] * 3,
+        'TotalCount': [5286/8, 5286/8, 5286/8, 5286/8, 5286/8, 5286/8, 5286/8, 5286/8] * 3,
+        'WarrantyCount': [483/8, 483/8, 483/8, 483/8, 483/8, 483/8, 483/8, 483/8] * 3,
+        'Month': ['May'] * 8 + ['June'] * 8 + ['May'] * 8
     }
     df = pd.DataFrame(data)
+    df['Replacement Category'] = df['Item Category'].apply(map_to_replacement_category)
     df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
     df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).round(2)
     df['AHSP'] = (df['WarrantyPrice'] / df['WarrantyCount']).where(df['WarrantyCount'] > 0, 0).round(2)
-    st.warning("Using sample data for May and June, calibrated for MAHESH (May: 9.15% Count, 1.07% Value; June: 9.15% Count, 1.07% Value) and RENJITH (May: 5.00% Count; June: 5.00% Count).")
+    st.warning("Using sample data for May and June with replacement warranty categories.")
 
 # Ensure Month column is categorical
 df['Month'] = pd.Categorical(df['Month'], categories=['May', 'June'], ordered=True)
+
+# Apply replacement warranty filter if selected
+if replacement_filter:
+    replacement_categories = ['FAN', 'MIXER GRINDER', 'IRON BOX', 'ELECTRIC KETTLE', 'OTG', 'STEAMER', 'INDUCTION COOKER']
+    df = df[df['Replacement Category'].isin(replacement_categories)]
+    category_column = 'Replacement Category'
+else:
+    category_column = 'Item Category'
 
 # Define filters after df is loaded
 with st.sidebar:
     bdm_options = ['All'] + sorted(df['BDM'].unique().tolist())
     rbm_options = ['All'] + sorted(df['RBM'].unique().tolist())
     store_options = ['All'] + sorted(df['Store'].unique().tolist())
-    category_options = ['All'] + sorted(df['Item Category'].unique().tolist())
+    category_options = ['All'] + sorted(df[category_column].unique().tolist())
 
     selected_bdm = st.selectbox("BDM", bdm_options, index=0)
     selected_rbm = st.selectbox("RBM", rbm_options, index=0)
     selected_store = st.selectbox("Store", store_options, index=0)
-    selected_category = st.selectbox("Item Category", category_options, index=0)
+    selected_category = st.selectbox(category_column, category_options, index=0)
 
     if selected_rbm != 'All':
         staff_options = ['All'] + sorted(df[df['RBM'] == selected_rbm]['Staff Name'].unique().tolist())
@@ -335,6 +384,8 @@ with st.sidebar:
 
 # Apply filters
 filtered_df = df.copy()
+if selected_month != 'All':
+    filtered_df = filtered_df[filtered_df['Month'] == selected_month]
 if selected_bdm != 'All':
     filtered_df = filtered_df[filtered_df['BDM'] == selected_bdm]
 if selected_rbm != 'All':
@@ -342,7 +393,7 @@ if selected_rbm != 'All':
 if selected_store != 'All':
     filtered_df = filtered_df[filtered_df['Store'] == selected_store]
 if selected_category != 'All':
-    filtered_df = filtered_df[filtered_df['Item Category'] == selected_category]
+    filtered_df = filtered_df[filtered_df[category_column] == selected_category]
 if selected_staff != 'All':
     filtered_df = filtered_df[filtered_df['Staff Name'] == selected_staff]
 if future_filter:
@@ -355,7 +406,7 @@ if filtered_df.empty:
 # Main dashboard
 st.markdown('<h2 class="subheader">📈 Performance Comparison: May vs June</h2>', unsafe_allow_html=True)
 
-# KPI comparison - UPDATED SECTION WITH CONSISTENT CALCULATIONS
+# KPI comparison
 st.markdown('<h3 class="subheader">Overall KPIs</h3>', unsafe_allow_html=True)
 col1, col2, col3, col4 = st.columns(4)
 
@@ -399,7 +450,7 @@ with col4:
     st.metric("AHSP (June)", f"₹{june_ahsp:,.2f}", 
               delta=f"₹{june_ahsp - may_ahsp:,.2f}" if may_ahsp > 0 else "N/A")
 
-# Store Performance Comparison - UPDATED TO MATCH KPI CALCULATIONS
+# Store Performance Comparison
 st.markdown('<h3 class="subheader">🏬 Store Performance Comparison</h3>', unsafe_allow_html=True)
 
 # First calculate store-level aggregates
@@ -505,7 +556,7 @@ fig_store.update_layout(
 )
 st.plotly_chart(fig_store, use_container_width=True)
 
-# RBM Performance Comparison - UPDATED TO MATCH KPI CALCULATIONS
+# RBM Performance Comparison
 st.markdown('<h3 class="subheader">👥 RBM Performance Comparison</h3>', unsafe_allow_html=True)
 
 # First calculate RBM-level aggregates
@@ -578,11 +629,11 @@ fig_rbm.update_layout(
 )
 st.plotly_chart(fig_rbm, use_container_width=True)
 
-# Item Category Performance Comparison - UPDATED TO MATCH KPI CALCULATIONS
-st.markdown('<h3 class="subheader">📦 Item Category Performance Comparison</h3>', unsafe_allow_html=True)
+# Category Performance Comparison
+st.markdown(f'<h3 class="subheader">📦 {category_column} Performance Comparison</h3>', unsafe_allow_html=True)
 
 # First calculate category-level aggregates
-category_summary = filtered_df.groupby(['Item Category', 'Month']).agg({
+category_summary = filtered_df.groupby([category_column, 'Month']).agg({
     'TotalSoldPrice': 'sum',
     'WarrantyPrice': 'sum',
     'TotalCount': 'sum',
@@ -596,7 +647,7 @@ category_summary['AHSP'] = (category_summary['WarrantyPrice'] / category_summary
 
 if not category_summary.empty:
     # Create pivot table for comparison
-    category_pivot = category_summary.pivot_table(index='Item Category', columns='Month', values=['Conversion% (Count)', 'Conversion% (Price)', 'AHSP'], aggfunc='first').fillna(0)
+    category_pivot = category_summary.pivot_table(index=category_column, columns='Month', values=['Conversion% (Count)', 'Conversion% (Price)', 'AHSP'], aggfunc='first').fillna(0)
     category_pivot.columns = [f"{col[1]} {col[0]}" for col in category_pivot.columns]
 
     # Ensure all required columns exist
@@ -612,8 +663,8 @@ if not category_summary.empty:
 
     # Prepare display dataframe
     category_display = category_pivot.reset_index()
-    category_display = category_display[['Item Category', 'May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP', 'Count Conversion Change (%)', 'Value Conversion Change (%)', 'AHSP Change (%)']]
-    category_display.columns = ['Item Category', 'May Count Conv (%)', 'June Count Conv (%)', 'May Value Conv (%)', 'June Value Conv (%)', 'May AHSP (₹)', 'June AHSP (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)']
+    category_display = category_display[[category_column, 'May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP', 'Count Conversion Change (%)', 'Value Conversion Change (%)', 'AHSP Change (%)']]
+    category_display.columns = [category_column, 'May Count Conv (%)', 'June Count Conv (%)', 'May Value Conv (%)', 'June Value Conv (%)', 'May AHSP (₹)', 'June AHSP (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)']
     category_display = category_display.fillna(0)
 
     st.dataframe(category_display.style.format({
@@ -630,11 +681,11 @@ if not category_summary.empty:
 
     # Visualization
     fig_category = px.bar(category_summary, 
-                          x='Item Category', 
+                          x=category_column, 
                           y='Conversion% (Count)', 
                           color='Month', 
                           barmode='group', 
-                          title='Item Category Count Conversion: May vs June',
+                          title=f'{category_column} Count Conversion: May vs June',
                           template='plotly_white',
                           color_discrete_sequence=['#3730a3', '#06b6d4'])
     fig_category.update_layout(
@@ -647,7 +698,7 @@ if not category_summary.empty:
     )
     st.plotly_chart(fig_category, use_container_width=True)
 else:
-    st.warning("No item category data available with current filters.")
+    st.warning(f"No {category_column.lower()} data available with current filters.")
     category_pivot = pd.DataFrame()
 
 # Insights
@@ -709,8 +760,8 @@ with st.expander("Store-Level Warranty Sales Analysis", expanded=True):
         st.write("**Reasons for Warranty Sales Decreases:**")
         decreased_stores = store_pivot[store_pivot['Change (%)'] < 0]
         if not decreased_stores.empty:
-            category_warranty = filtered_df.groupby(['Store', 'Month', 'Item Category'])['WarrantyPrice'].sum().reset_index()
-            category_pivot_warranty = category_warranty.pivot_table(index=['Store', 'Item Category'], columns='Month', values='WarrantyPrice', aggfunc='first').fillna(0)
+            category_warranty = filtered_df.groupby(['Store', 'Month', category_column])['WarrantyPrice'].sum().reset_index()
+            category_pivot_warranty = category_warranty.pivot_table(index=['Store', category_column], columns='Month', values='WarrantyPrice', aggfunc='first').fillna(0)
             category_pivot_warranty['Change (₹)'] = category_pivot_warranty['June'] - category_pivot_warranty['May']
             
             store_metrics = filtered_df.groupby(['Store', 'Month']).agg({
@@ -785,7 +836,7 @@ with st.expander("Significant Changes", expanded=True):
     if not category_pivot.empty:
         significant_categories = category_pivot[abs(category_pivot['Count Conversion Change (%)']) > 2]
         if not significant_categories.empty:
-            st.write("**Item Categories with Significant Count Conversion Changes:**")
+            st.write(f"**{category_column} with Significant Count Conversion Changes:**")
             for category in significant_categories.index:
                 change = float(category_pivot.loc[category, 'Count Conversion Change (%)'])
                 st.write(f"- {category}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
@@ -872,6 +923,83 @@ if future_filter or any('FUTURE' in store for store in filtered_df['Store'].uniq
                 st.success("FUTURE stores meet or exceed targets in June!")
         else:
             st.info("No FUTURE stores in current selection")
+
+# Replacement Warranty Categories Analysis
+if replacement_filter:
+    with st.expander("Replacement Warranty Categories Deep Dive", expanded=True):
+        st.markdown('<h3 class="subheader">🔄 Replacement Warranty Category Performance</h3>', unsafe_allow_html=True)
+        
+        # Calculate warranty sales by replacement category
+        replacement_sales = filtered_df.groupby(['Replacement Category', 'Month']).agg({
+            'TotalSoldPrice': 'sum',
+            'WarrantyPrice': 'sum',
+            'TotalCount': 'sum',
+            'WarrantyCount': 'sum'
+        }).reset_index()
+        
+        # Calculate metrics
+        replacement_sales['Conversion% (Count)'] = (replacement_sales['WarrantyCount'] / replacement_sales['TotalCount'] * 100).round(2)
+        replacement_sales['Conversion% (Price)'] = (replacement_sales['WarrantyPrice'] / replacement_sales['TotalSoldPrice'] * 100).round(2)
+        replacement_sales['AHSP'] = (replacement_sales['WarrantyPrice'] / replacement_sales['WarrantyCount']).where(replacement_sales['WarrantyCount'] > 0, 0).round(2)
+        
+        # Pivot for comparison
+        replacement_pivot = replacement_sales.pivot_table(index='Replacement Category', columns='Month', 
+                                                         values=['WarrantyPrice', 'Conversion% (Count)', 'Conversion% (Price)', 'AHSP'], 
+                                                         aggfunc='first').fillna(0)
+        replacement_pivot.columns = [f"{col[1]} {col[0]}" for col in replacement_pivot.columns]
+        
+        # Calculate changes
+        replacement_pivot['Warranty Sales Change (₹)'] = replacement_pivot['June WarrantyPrice'] - replacement_pivot['May WarrantyPrice']
+        replacement_pivot['Count Conversion Change (%)'] = replacement_pivot['June Conversion% (Count)'] - replacement_pivot['May Conversion% (Count)']
+        replacement_pivot['Value Conversion Change (%)'] = replacement_pivot['June Conversion% (Price)'] - replacement_pivot['May Conversion% (Price)']
+        replacement_pivot['AHSP Change (₹)'] = replacement_pivot['June AHSP'] - replacement_pivot['May AHSP']
+        
+        # Prepare display
+        display_cols = ['May WarrantyPrice', 'June WarrantyPrice', 'Warranty Sales Change (₹)',
+                       'May Conversion% (Count)', 'June Conversion% (Count)', 'Count Conversion Change (%)',
+                       'May Conversion% (Price)', 'June Conversion% (Price)', 'Value Conversion Change (%)',
+                       'May AHSP', 'June AHSP', 'AHSP Change (₹)']
+        
+        display_df = replacement_pivot[display_cols].reset_index()
+        display_df.columns = ['Replacement Category', 'May Warranty (₹)', 'June Warranty (₹)', 'Warranty Change (₹)',
+                             'May Count Conv (%)', 'June Count Conv (%)', 'Count Conv Change (%)',
+                             'May Value Conv (%)', 'June Value Conv (%)', 'Value Conv Change (%)',
+                             'May AHSP (₹)', 'June AHSP (₹)', 'AHSP Change (₹)']
+        
+        st.dataframe(display_df.style.format({
+            'May Warranty (₹)': '₹{:.0f}',
+            'June Warranty (₹)': '₹{:.0f}',
+            'Warranty Change (₹)': '₹{:.0f}',
+            'May Count Conv (%)': '{:.2f}%',
+            'June Count Conv (%)': '{:.2f}%',
+            'Count Conv Change (%)': '{:.2f}%',
+            'May Value Conv (%)': '{:.2f}%',
+            'June Value Conv (%)': '{:.2f}%',
+            'Value Conv Change (%)': '{:.2f}%',
+            'May AHSP (₹)': '₹{:.2f}',
+            'June AHSP (₹)': '₹{:.2f}',
+            'AHSP Change (₹)': '₹{:.2f}'
+        }).applymap(highlight_change, subset=['Warranty Change (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (₹)']), 
+        use_container_width=True)
+        
+        # Visualization
+        fig_replacement = px.bar(replacement_sales, 
+                                x='Replacement Category', 
+                                y='Conversion% (Count)', 
+                                color='Month', 
+                                barmode='group', 
+                                title='Replacement Category Count Conversion: May vs June',
+                                template='plotly_white',
+                                color_discrete_sequence=['#3730a3', '#06b6d4'])
+        fig_replacement.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(family="Poppins, Inter, sans-serif", size=12, color="#1f2937"),
+            showlegend=True,
+            xaxis=dict(showgrid=False, tickangle=45),
+            yaxis=dict(showgrid=True, gridcolor='#e5e7eb')
+        )
+        st.plotly_chart(fig_replacement, use_container_width=True)
 
 # Correlation Analysis
 st.markdown('<h3 class="subheader">🔗 Correlation Analysis (June)</h3>', unsafe_allow_html=True)
