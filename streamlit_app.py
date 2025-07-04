@@ -316,6 +316,9 @@ with st.sidebar:
     # Replacement warranty filter
     replacement_filter = st.checkbox("Show Replacement Warranty Categories Only")
     
+    # Speaker category filter
+    speaker_filter = st.checkbox("Show Speaker Categories Only")
+    
     # Month filter
     month_options = ['All', 'May', 'June']
     selected_month = st.selectbox("Month", month_options, index=0)
@@ -329,35 +332,39 @@ if df is None:
         df = pd.concat(df_list, ignore_index=True)
         st.info("Loaded saved May and/or June data.")
 
-# If no uploaded or saved files, use sample data with replacement categories
+# If no uploaded or saved files, use sample data with speaker categories
 if df is None:
     data = {
-        'Item Category': ['CEILING FAN', 'PEDESTAL FAN', 'MIXER GRINDER', 'IRON BOX', 'ELECTRIC KETTLE', 'OTG', 'GARMENTS STEAMER', 'INDUCTION COOKER'] * 3,
+        'Item Category': ['CEILING FAN', 'PEDESTAL FAN', 'MIXER GRINDER', 'IRON BOX', 'ELECTRIC KETTLE', 'OTG', 'GARMENTS STEAMER', 'INDUCTION COOKER', 'SOUND BAR', 'PARTY SPEAKER', 'BLUETOOTH SPEAKER', 'HOME THEATRE'] * 2,
         'BDM': ['BDM1'] * 24,
         'RBM': ['MAHESH'] * 12 + ['RENJITH'] * 12,
         'Store': ['Palakkad FUTURE', 'Store B'] * 6 + ['Kannur FUTURE', 'Store C'] * 6,
         'Staff Name': ['Staff1', 'Staff2'] * 12,
-        'TotalSoldPrice': [48239177/8, 48239177/8, 48239177/8, 48239177/8, 48239177/8, 48239177/8, 48239177/8, 48239177/8] * 3,
-        'WarrantyPrice': [300619/8, 300619/8, 300619/8, 300619/8, 300619/8, 300619/8, 300619/8, 300619/8] * 3,
-        'TotalCount': [5286/8, 5286/8, 5286/8, 5286/8, 5286/8, 5286/8, 5286/8, 5286/8] * 3,
-        'WarrantyCount': [483/8, 483/8, 483/8, 483/8, 483/8, 483/8, 483/8, 483/8] * 3,
-        'Month': ['May'] * 8 + ['June'] * 8 + ['May'] * 8
+        'TotalSoldPrice': [48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12] * 2,
+        'WarrantyPrice': [300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12] * 2,
+        'TotalCount': [5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12] * 2,
+        'WarrantyCount': [483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12] * 2,
+        'Month': ['May'] * 12 + ['June'] * 12
     }
     df = pd.DataFrame(data)
     df['Replacement Category'] = df['Item Category'].apply(map_to_replacement_category)
     df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
     df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).round(2)
     df['AHSP'] = (df['WarrantyPrice'] / df['WarrantyCount']).where(df['WarrantyCount'] > 0, 0).round(2)
-    st.warning("Using sample data for May and June with replacement warranty categories.")
+    st.warning("Using sample data for May and June with speaker categories.")
 
 # Ensure Month column is categorical
 df['Month'] = pd.Categorical(df['Month'], categories=['May', 'June'], ordered=True)
 
-# Apply replacement warranty filter if selected
+# Apply replacement or speaker filter if selected
 if replacement_filter:
     replacement_categories = ['FAN', 'MIXER GRINDER', 'IRON BOX', 'ELECTRIC KETTLE', 'OTG', 'STEAMER', 'INDUCTION COOKER']
     df = df[df['Replacement Category'].isin(replacement_categories)]
     category_column = 'Replacement Category'
+elif speaker_filter:
+    speaker_categories = ['SOUND BAR', 'PARTY SPEAKER', 'BLUETOOTH SPEAKER', 'HOME THEATRE']
+    df = df[df['Item Category'].isin(speaker_categories)]
+    category_column = 'Item Category'
 else:
     category_column = 'Item Category'
 
@@ -407,8 +414,8 @@ if filtered_df.empty:
 st.markdown('<h2 class="subheader">📈 Performance Comparison: May vs June</h2>', unsafe_allow_html=True)
 
 # KPI comparison
-st.markdown('<h3 class="subheader">Overall KPIs</h3>', unsafe_allow_html=True)
-col1, col2, col3, col4 = st.columns(4)
+st.markdown('<h3 class="subheader">Warranty Total Count and KPIs</h3>', unsafe_allow_html=True)
+col1, col2, col3, col4, col5 = st.columns(5)
 
 # Calculate metrics from the raw data (not averages)
 may_data = filtered_df[filtered_df['Month'] == 'May']
@@ -449,6 +456,11 @@ with col4:
     st.metric("AHSP (May)", f"₹{may_ahsp:,.2f}")
     st.metric("AHSP (June)", f"₹{june_ahsp:,.2f}", 
               delta=f"₹{june_ahsp - may_ahsp:,.2f}" if may_ahsp > 0 else "N/A")
+
+with col5:
+    st.metric("Warranty Unit Count (May)", f"{may_total_warranty_units:,.0f}")
+    st.metric("Warranty Unit Count (June)", f"{june_total_warranty_units:,.0f}", 
+              delta=f"{((june_total_warranty_units - may_total_warranty_units) / may_total_warranty_units * 100):.2f}%" if may_total_warranty_units > 0 else "N/A")
 
 # Store Performance Comparison
 st.markdown('<h3 class="subheader">🏬 Store Performance Comparison</h3>', unsafe_allow_html=True)
@@ -966,7 +978,12 @@ if replacement_filter:
                              'May Value Conv (%)', 'June Value Conv (%)', 'Value Conv Change (%)',
                              'May AHSP (₹)', 'June AHSP (₹)', 'AHSP Change (₹)']
         
-        st.dataframe(display_df.style.format({
+        def highlight_replacement_change(val, column):
+            if column in ['Warranty Change (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (₹)']:
+                return 'color: green' if val > 0 else 'color: red' if val < 0 else 'color: black'
+            return ''
+        
+        styled_df = display_df.style.format({
             'May Warranty (₹)': '₹{:.0f}',
             'June Warranty (₹)': '₹{:.0f}',
             'Warranty Change (₹)': '₹{:.0f}',
@@ -979,8 +996,12 @@ if replacement_filter:
             'May AHSP (₹)': '₹{:.2f}',
             'June AHSP (₹)': '₹{:.2f}',
             'AHSP Change (₹)': '₹{:.2f}'
-        }).applymap(highlight_change, subset=['Warranty Change (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (₹)']), 
-        use_container_width=True)
+        })
+        
+        for col in ['Warranty Change (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (₹)']:
+            styled_df = styled_df.apply(lambda x: [highlight_replacement_change(val, col) for val in x], subset=[col], axis=0)
+        
+        st.dataframe(styled_df, use_container_width=True)
         
         # Visualization
         fig_replacement = px.bar(replacement_sales, 
@@ -1000,6 +1021,90 @@ if replacement_filter:
             yaxis=dict(showgrid=True, gridcolor='#e5e7eb')
         )
         st.plotly_chart(fig_replacement, use_container_width=True)
+
+# Speaker Categories Analysis
+if speaker_filter:
+    with st.expander("Speaker Categories Deep Dive", expanded=True):
+        st.markdown('<h3 class="subheader">🔊 Speaker Category Performance</h3>', unsafe_allow_html=True)
+        
+        # Calculate warranty sales by speaker category
+        speaker_categories = ['SOUND BAR', 'PARTY SPEAKER', 'BLUETOOTH SPEAKER', 'HOME THEATRE']
+        speaker_sales = filtered_df[filtered_df['Item Category'].isin(speaker_categories)].groupby(['Item Category', 'Month']).agg({
+            'TotalSoldPrice': 'sum',
+            'WarrantyPrice': 'sum',
+            'TotalCount': 'sum',
+            'WarrantyCount': 'sum'
+        }).reset_index()
+        
+        # Calculate metrics
+        speaker_sales['Conversion% (Count)'] = (speaker_sales['WarrantyCount'] / speaker_sales['TotalCount'] * 100).round(2)
+        speaker_sales['Conversion% (Price)'] = (speaker_sales['WarrantyPrice'] / speaker_sales['TotalSoldPrice'] * 100).round(2)
+        speaker_sales['AHSP'] = (speaker_sales['WarrantyPrice'] / speaker_sales['WarrantyCount']).where(speaker_sales['WarrantyCount'] > 0, 0).round(2)
+        
+        # Pivot for comparison
+        speaker_pivot = speaker_sales.pivot_table(index='Item Category', columns='Month', 
+                                                 values=['WarrantyPrice', 'Conversion% (Count)', 'Conversion% (Price)', 'AHSP'], 
+                                                 aggfunc='first').fillna(0)
+        speaker_pivot.columns = [f"{col[1]} {col[0]}" for col in speaker_pivot.columns]
+        
+        # Ensure all required columns exist
+        for col in ['May WarrantyPrice', 'June WarrantyPrice', 'May Conversion% (Count)', 'June Conversion% (Count)', 
+                    'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP']:
+            if col not in speaker_pivot.columns:
+                speaker_pivot[col] = 0
+        
+        # Calculate changes
+        speaker_pivot['Warranty Sales Change (₹)'] = speaker_pivot['June WarrantyPrice'] - speaker_pivot['May WarrantyPrice']
+        speaker_pivot['Count Conversion Change (%)'] = speaker_pivot['June Conversion% (Count)'] - speaker_pivot['May Conversion% (Count)']
+        speaker_pivot['Value Conversion Change (%)'] = speaker_pivot['June Conversion% (Price)'] - speaker_pivot['May Conversion% (Price)']
+        speaker_pivot['AHSP Change (₹)'] = speaker_pivot['June AHSP'] - speaker_pivot['May AHSP']
+        
+        # Prepare display
+        display_cols = ['May WarrantyPrice', 'June WarrantyPrice', 'Warranty Sales Change (₹)',
+                       'May Conversion% (Count)', 'June Conversion% (Count)', 'Count Conversion Change (%)',
+                       'May Conversion% (Price)', 'June Conversion% (Price)', 'Value Conversion Change (%)',
+                       'May AHSP', 'June AHSP', 'AHSP Change (₹)']
+        
+        display_df = speaker_pivot[display_cols].reset_index()
+        display_df.columns = ['Speaker Category', 'May Warranty (₹)', 'June Warranty (₹)', 'Warranty Change (₹)',
+                             'May Count Conv (%)', 'June Count Conv (%)', 'Count Conv Change (%)',
+                             'May Value Conv (%)', 'June Value Conv (%)', 'Value Conv Change (%)',
+                             'May AHSP (₹)', 'June AHSP (₹)', 'AHSP Change (₹)']
+        
+        st.dataframe(display_df.style.format({
+            'May Warranty (₹)': '₹{:.0f}',
+            'June Warranty (₹)': '₹{:.0f}',
+            'Warranty Change (₹)': '₹{:.0f}',
+            'May Count Conv (%)': '{:.2f}%',
+            'June Count Conv (%)': '{:.2f}%',
+            'Count Conv Change (%)': '{:.2f}%',
+            'May Value Conv (%)': '{:.2f}%',
+            'June Value Conv (%)': '{:.2f}%',
+            'Value Conv Change (%)': '{:.2f}%',
+            'May AHSP (₹)': '₹{:.2f}',
+            'June AHSP (₹)': '₹{:.2f}',
+            'AHSP Change (₹)': '₹{:.2f}'
+        }).applymap(highlight_change, subset=['Warranty Change (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (₹)']), 
+        use_container_width=True)
+        
+        # Visualization
+        fig_speaker = px.bar(speaker_sales, 
+                             x='Item Category', 
+                             y='Conversion% (Count)', 
+                             color='Month', 
+                             barmode='group', 
+                             title='Speaker Category Count Conversion: May vs June',
+                             template='plotly_white',
+                             color_discrete_sequence=['#3730a3', '#06b6d4'])
+        fig_speaker.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(family="Poppins, Inter, sans-serif", size=12, color="#1f2937"),
+            showlegend=True,
+            xaxis=dict(showgrid=False, tickangle=45),
+            yaxis=dict(showgrid=True, gridcolor='#e5e7eb')
+        )
+        st.plotly_chart(fig_speaker, use_container_width=True)
 
 # Correlation Analysis
 st.markdown('<h3 class="subheader">🔗 Correlation Analysis (June)</h3>', unsafe_allow_html=True)
