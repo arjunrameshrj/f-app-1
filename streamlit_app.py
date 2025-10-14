@@ -145,8 +145,9 @@ DATA_DIR = "data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-MAY_FILE_PATH = os.path.join(DATA_DIR, "may_data.csv")
-JUNE_FILE_PATH = os.path.join(DATA_DIR, "june_data.csv")
+JULY_FILE_PATH = os.path.join(DATA_DIR, "july_data.csv")
+AUGUST_FILE_PATH = os.path.join(DATA_DIR, "august_data.csv")
+SEPTEMBER_FILE_PATH = os.path.join(DATA_DIR, "september_data.csv")
 USER_CREDENTIALS_FILE = os.path.join(DATA_DIR, "user_credentials.txt")
 
 # Function to hash passwords
@@ -269,25 +270,27 @@ with st.sidebar:
     # File upload form
     st.markdown('<h3 style="color: #3730a3; font-weight: 500;">📁 Upload Data Files</h3>', unsafe_allow_html=True)
     with st.form("upload_form"):
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
-            may_file = st.file_uploader("May Data", type=["csv", "xlsx", "xls"], key="may")
+            july_file = st.file_uploader("July Data", type=["csv", "xlsx", "xls"], key="july")
         with col2:
-            june_file = st.file_uploader("June Data", type=["csv", "xlsx", "xls"], key="june")
+            august_file = st.file_uploader("August Data", type=["csv", "xlsx", "xls"], key="august")
+        with col3:
+            september_file = st.file_uploader("September Data", type=["csv", "xlsx", "xls"], key="september")
         upload_password = st.text_input("Upload Password", type="password", placeholder="Enter password to upload")
         submit_upload = st.form_submit_button("Upload", type="primary")
         if submit_upload:
             if authenticate("admin", upload_password):
-                may_df = load_data(may_file, "May", MAY_FILE_PATH) if may_file else None
-                june_df = load_data(june_file, "June", JUNE_FILE_PATH) if june_file else None
-                if may_df is not None or june_df is not None:
-                    df_list = [df for df in [may_df, june_df] if df is not None]
-                    if df_list:
-                        df = pd.concat(df_list, ignore_index=True)
+                july_df = load_data(july_file, "July", JULY_FILE_PATH) if july_file else None
+                august_df = load_data(august_file, "August", AUGUST_FILE_PATH) if august_file else None
+                september_df = load_data(september_file, "September", SEPTEMBER_FILE_PATH) if september_file else None
+                df_list = [df for df in [july_df, august_df, september_df] if df is not None]
+                if df_list:
+                    df = pd.concat(df_list, ignore_index=True)
+                else:
+                    st.warning("Please select at least one file to upload.")
             else:
                 st.error("Invalid password. Upload failed.")
-            if not may_file and not june_file:
-                st.warning("Please select at least one file to upload.")
 
     # Admin login
     st.markdown('<hr style="border: 1px solid #e5e7eb; margin: 20px 0;">', unsafe_allow_html=True)
@@ -320,41 +323,42 @@ with st.sidebar:
     speaker_filter = st.checkbox("Show Speaker Categories Only")
     
     # Month filter
-    month_options = ['All', 'May', 'June']
+    month_options = ['All', 'July', 'August', 'September']
     selected_month = st.selectbox("Month", month_options, index=0)
 
 # Load saved data if no new upload
 if df is None:
-    may_df = load_data(MAY_FILE_PATH, "May") if os.path.exists(MAY_FILE_PATH) else None
-    june_df = load_data(JUNE_FILE_PATH, "June") if os.path.exists(JUNE_FILE_PATH) else None
-    df_list = [df for df in [may_df, june_df] if df is not None]
+    july_df = load_data(JULY_FILE_PATH, "July") if os.path.exists(JULY_FILE_PATH) else None
+    august_df = load_data(AUGUST_FILE_PATH, "August") if os.path.exists(AUGUST_FILE_PATH) else None
+    september_df = load_data(SEPTEMBER_FILE_PATH, "September") if os.path.exists(SEPTEMBER_FILE_PATH) else None
+    df_list = [df for df in [july_df, august_df, september_df] if df is not None]
     if df_list:
         df = pd.concat(df_list, ignore_index=True)
-        st.info("Loaded saved May and/or June data.")
+        st.info("Loaded saved July, August, and/or September data.")
 
 # If no uploaded or saved files, use sample data with speaker categories
 if df is None:
     data = {
-        'Item Category': ['CEILING FAN', 'PEDESTAL FAN', 'MIXER GRINDER', 'IRON BOX', 'ELECTRIC KETTLE', 'OTG', 'GARMENTS STEAMER', 'INDUCTION COOKER', 'SOUND BAR', 'PARTY SPEAKER', 'BLUETOOTH SPEAKER', 'HOME THEATRE'] * 2,
-        'BDM': ['BDM1'] * 24,
-        'RBM': ['MAHESH'] * 12 + ['RENJITH'] * 12,
-        'Store': ['Palakkad FUTURE', 'Store B'] * 6 + ['Kannur FUTURE', 'Store C'] * 6,
-        'Staff Name': ['Staff1', 'Staff2'] * 12,
-        'TotalSoldPrice': [48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12] * 2,
-        'WarrantyPrice': [300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12] * 2,
-        'TotalCount': [5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12] * 2,
-        'WarrantyCount': [483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12] * 2,
-        'Month': ['May'] * 12 + ['June'] * 12
+        'Item Category': ['CEILING FAN', 'PEDESTAL FAN', 'MIXER GRINDER', 'IRON BOX', 'ELECTRIC KETTLE', 'OTG', 'GARMENTS STEAMER', 'INDUCTION COOKER', 'SOUND BAR', 'PARTY SPEAKER', 'BLUETOOTH SPEAKER', 'HOME THEATRE'] * 3,
+        'BDM': ['BDM1'] * 36,
+        'RBM': ['MAHESH'] * 12 + ['RENJITH'] * 12 + ['JOHN'] * 12,
+        'Store': ['Palakkad FUTURE', 'Store B'] * 6 + ['Kannur FUTURE', 'Store C'] * 6 + ['Kochi FUTURE', 'Store D'] * 6,
+        'Staff Name': ['Staff1', 'Staff2'] * 18,
+        'TotalSoldPrice': [48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12, 48239177/12] * 3,
+        'WarrantyPrice': [300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12, 300619/12] * 3,
+        'TotalCount': [5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12, 5286/12] * 3,
+        'WarrantyCount': [483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12, 483/12] * 3,
+        'Month': ['July'] * 12 + ['August'] * 12 + ['September'] * 12
     }
     df = pd.DataFrame(data)
     df['Replacement Category'] = df['Item Category'].apply(map_to_replacement_category)
     df['Conversion% (Count)'] = (df['WarrantyCount'] / df['TotalCount'] * 100).round(2)
     df['Conversion% (Price)'] = (df['WarrantyPrice'] / df['TotalSoldPrice'] * 100).round(2)
     df['AHSP'] = (df['WarrantyPrice'] / df['WarrantyCount']).where(df['WarrantyCount'] > 0, 0).round(2)
-    st.warning("Using sample data for May and June with speaker categories.")
+    st.warning("Using sample data for July, August, and September with speaker categories.")
 
 # Ensure Month column is categorical
-df['Month'] = pd.Categorical(df['Month'], categories=['May', 'June'], ordered=True)
+df['Month'] = pd.Categorical(df['Month'], categories=['July', 'August', 'September'], ordered=True)
 
 # Apply replacement or speaker filter if selected
 if replacement_filter:
@@ -411,56 +415,78 @@ if filtered_df.empty:
     st.stop()
 
 # Main dashboard
-st.markdown('<h2 class="subheader">📈 Performance Comparison: May vs June</h2>', unsafe_allow_html=True)
+st.markdown('<h2 class="subheader">📈 Performance Comparison: July vs August vs September</h2>', unsafe_allow_html=True)
 
 # KPI comparison
 st.markdown('<h3 class="subheader">Warranty Total Count and KPIs</h3>', unsafe_allow_html=True)
 col1, col2, col3, col4, col5 = st.columns(5)
 
 # Calculate metrics from the raw data (not averages)
-may_data = filtered_df[filtered_df['Month'] == 'May']
-june_data = filtered_df[filtered_df['Month'] == 'June']
+july_data = filtered_df[filtered_df['Month'] == 'July']
+august_data = filtered_df[filtered_df['Month'] == 'August']
+september_data = filtered_df[filtered_df['Month'] == 'September']
 
-may_total_warranty = may_data['WarrantyPrice'].sum()
-may_total_units = may_data['TotalCount'].sum()
-may_total_warranty_units = may_data['WarrantyCount'].sum()
-may_total_sales = may_data['TotalSoldPrice'].sum()
-may_value_conversion = (may_total_warranty / may_total_sales * 100) if may_total_sales > 0 else 0
-may_count_conversion = (may_total_warranty_units / may_total_units * 100) if may_total_units > 0 else 0
-may_ahsp = (may_total_warranty / may_total_warranty_units) if may_total_warranty_units > 0 else 0
+# July metrics
+july_total_warranty = july_data['WarrantyPrice'].sum()
+july_total_units = july_data['TotalCount'].sum()
+july_total_warranty_units = july_data['WarrantyCount'].sum()
+july_total_sales = july_data['TotalSoldPrice'].sum()
+july_value_conversion = (july_total_warranty / july_total_sales * 100) if july_total_sales > 0 else 0
+july_count_conversion = (july_total_warranty_units / july_total_units * 100) if july_total_units > 0 else 0
+july_ahsp = (july_total_warranty / july_total_warranty_units) if july_total_warranty_units > 0 else 0
 
-june_total_warranty = june_data['WarrantyPrice'].sum()
-june_total_units = june_data['TotalCount'].sum()
-june_total_warranty_units = june_data['WarrantyCount'].sum()
-june_total_sales = june_data['TotalSoldPrice'].sum()
-june_value_conversion = (june_total_warranty / june_total_sales * 100) if june_total_sales > 0 else 0
-june_count_conversion = (june_total_warranty_units / june_total_units * 100) if june_total_units > 0 else 0
-june_ahsp = (june_total_warranty / june_total_warranty_units) if june_total_warranty_units > 0 else 0
+# August metrics
+august_total_warranty = august_data['WarrantyPrice'].sum()
+august_total_units = august_data['TotalCount'].sum()
+august_total_warranty_units = august_data['WarrantyCount'].sum()
+august_total_sales = august_data['TotalSoldPrice'].sum()
+august_value_conversion = (august_total_warranty / august_total_sales * 100) if august_total_sales > 0 else 0
+august_count_conversion = (august_total_warranty_units / august_total_units * 100) if august_total_units > 0 else 0
+august_ahsp = (august_total_warranty / august_total_warranty_units) if august_total_warranty_units > 0 else 0
+
+# September metrics
+september_total_warranty = september_data['WarrantyPrice'].sum()
+september_total_units = september_data['TotalCount'].sum()
+september_total_warranty_units = september_data['WarrantyCount'].sum()
+september_total_sales = september_data['TotalSoldPrice'].sum()
+september_value_conversion = (september_total_warranty / september_total_sales * 100) if september_total_sales > 0 else 0
+september_count_conversion = (september_total_warranty_units / september_total_units * 100) if september_total_units > 0 else 0
+september_ahsp = (september_total_warranty / september_total_warranty_units) if september_total_warranty_units > 0 else 0
 
 with col1:
-    st.metric("Warranty Sales (May)", f"₹{may_total_warranty:,.0f}")
-    st.metric("Warranty Sales (June)", f"₹{june_total_warranty:,.0f}", 
-              delta=f"{((june_total_warranty - may_total_warranty) / may_total_warranty * 100):.2f}%" if may_total_warranty > 0 else "N/A")
+    st.metric("Warranty Sales (July)", f"₹{july_total_warranty:,.0f}")
+    st.metric("Warranty Sales (August)", f"₹{august_total_warranty:,.0f}", 
+              delta=f"{((august_total_warranty - july_total_warranty) / july_total_warranty * 100):.2f}%" if july_total_warranty > 0 else "N/A")
+    st.metric("Warranty Sales (September)", f"₹{september_total_warranty:,.0f}", 
+              delta=f"{((september_total_warranty - august_total_warranty) / august_total_warranty * 100):.2f}%" if august_total_warranty > 0 else "N/A")
 
 with col2:
-    st.metric("Count Conversion (May)", f"{may_count_conversion:.2f}%")
-    st.metric("Count Conversion (June)", f"{june_count_conversion:.2f}%", 
-              delta=f"{june_count_conversion - may_count_conversion:.2f}%")
+    st.metric("Count Conversion (July)", f"{july_count_conversion:.2f}%")
+    st.metric("Count Conversion (August)", f"{august_count_conversion:.2f}%", 
+              delta=f"{august_count_conversion - july_count_conversion:.2f}%")
+    st.metric("Count Conversion (September)", f"{september_count_conversion:.2f}%", 
+              delta=f"{september_count_conversion - august_count_conversion:.2f}%")
 
 with col3:
-    st.metric("Value Conversion (May)", f"{may_value_conversion:.2f}%")
-    st.metric("Value Conversion (June)", f"{june_value_conversion:.2f}%", 
-              delta=f"{june_value_conversion - may_value_conversion:.2f}%")
+    st.metric("Value Conversion (July)", f"{july_value_conversion:.2f}%")
+    st.metric("Value Conversion (August)", f"{august_value_conversion:.2f}%", 
+              delta=f"{august_value_conversion - july_value_conversion:.2f}%")
+    st.metric("Value Conversion (September)", f"{september_value_conversion:.2f}%", 
+              delta=f"{september_value_conversion - august_value_conversion:.2f}%")
 
 with col4:
-    st.metric("AHSP (May)", f"₹{may_ahsp:,.2f}")
-    st.metric("AHSP (June)", f"₹{june_ahsp:,.2f}", 
-              delta=f"₹{june_ahsp - may_ahsp:,.2f}" if may_ahsp > 0 else "N/A")
+    st.metric("AHSP (July)", f"₹{july_ahsp:,.2f}")
+    st.metric("AHSP (August)", f"₹{august_ahsp:,.2f}", 
+              delta=f"₹{august_ahsp - july_ahsp:,.2f}" if july_ahsp > 0 else "N/A")
+    st.metric("AHSP (September)", f"₹{september_ahsp:,.2f}", 
+              delta=f"₹{september_ahsp - august_ahsp:,.2f}" if august_ahsp > 0 else "N/A")
 
 with col5:
-    st.metric("Warranty Unit Count (May)", f"{may_total_warranty_units:,.0f}")
-    st.metric("Warranty Unit Count (June)", f"{june_total_warranty_units:,.0f}", 
-              delta=f"{((june_total_warranty_units - may_total_warranty_units) / may_total_warranty_units * 100):.2f}%" if may_total_warranty_units > 0 else "N/A")
+    st.metric("Warranty Unit Count (July)", f"{july_total_warranty_units:,.0f}")
+    st.metric("Warranty Unit Count (August)", f"{august_total_warranty_units:,.0f}", 
+              delta=f"{((august_total_warranty_units - july_total_warranty_units) / july_total_warranty_units * 100):.2f}%" if july_total_warranty_units > 0 else "N/A")
+    st.metric("Warranty Unit Count (September)", f"{september_total_warranty_units:,.0f}", 
+              delta=f"{((september_total_warranty_units - august_total_warranty_units) / august_total_warranty_units * 100):.2f}%" if august_total_warranty_units > 0 else "N/A")
 
 # Store Performance Comparison
 st.markdown('<h3 class="subheader">🏬 Store Performance Comparison</h3>', unsafe_allow_html=True)
@@ -483,51 +509,85 @@ store_conv_pivot = store_summary.pivot_table(index='Store', columns='Month', val
 store_conv_pivot.columns = [f"{col[1]} {col[0]}" for col in store_conv_pivot.columns]
 
 # Ensure all required columns exist
-for col in ['May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP']:
+for col in ['July Conversion% (Count)', 'August Conversion% (Count)', 'September Conversion% (Count)', 
+            'July Conversion% (Price)', 'August Conversion% (Price)', 'September Conversion% (Price)', 
+            'July AHSP', 'August AHSP', 'September AHSP']:
     if col not in store_conv_pivot.columns:
         store_conv_pivot[col] = 0
 
 # Calculate changes
-store_conv_pivot['Count Conversion Change (%)'] = (store_conv_pivot['June Conversion% (Count)'] - store_conv_pivot['May Conversion% (Count)']).round(2)
-store_conv_pivot['Value Conversion Change (%)'] = (store_conv_pivot['June Conversion% (Price)'] - store_conv_pivot['May Conversion% (Price)']).round(2)
-store_conv_pivot['AHSP Change (%)'] = ((store_conv_pivot['June AHSP'] - store_conv_pivot['May AHSP']) / store_conv_pivot['May AHSP'] * 100).where(store_conv_pivot['May AHSP'] > 0, 0).round(2)
+store_conv_pivot['Count Conv Change Jul-Aug (%)'] = (store_conv_pivot['August Conversion% (Count)'] - store_conv_pivot['July Conversion% (Count)']).round(2)
+store_conv_pivot['Count Conv Change Aug-Sep (%)'] = (store_conv_pivot['September Conversion% (Count)'] - store_conv_pivot['August Conversion% (Count)']).round(2)
+store_conv_pivot['Value Conv Change Jul-Aug (%)'] = (store_conv_pivot['August Conversion% (Price)'] - store_conv_pivot['July Conversion% (Price)']).round(2)
+store_conv_pivot['Value Conv Change Aug-Sep (%)'] = (store_conv_pivot['September Conversion% (Price)'] - store_conv_pivot['August Conversion% (Price)']).round(2)
+store_conv_pivot['AHSP Change Jul-Aug (%)'] = ((store_conv_pivot['August AHSP'] - store_conv_pivot['July AHSP']) / store_conv_pivot['July AHSP'] * 100).where(store_conv_pivot['July AHSP'] > 0, 0).round(2)
+store_conv_pivot['AHSP Change Aug-Sep (%)'] = ((store_conv_pivot['September AHSP'] - store_conv_pivot['August AHSP']) / store_conv_pivot['August AHSP'] * 100).where(store_conv_pivot['August AHSP'] > 0, 0).round(2)
 
-# Sort by count conversion change
-store_conv_pivot = store_conv_pivot.sort_values('Count Conversion Change (%)', ascending=False)
+# Sort by September count conversion
+store_conv_pivot = store_conv_pivot.sort_values('September Conversion% (Count)', ascending=False)
 
 # Calculate TOTAL row using the same method as KPIs (sum of all, then calculate metrics)
-total_may = store_summary[store_summary['Month'] == 'May'][['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']].sum()
-total_june = store_summary[store_summary['Month'] == 'June'][['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']].sum()
+total_july = store_summary[store_summary['Month'] == 'July'][['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']].sum()
+total_august = store_summary[store_summary['Month'] == 'August'][['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']].sum()
+total_september = store_summary[store_summary['Month'] == 'September'][['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']].sum()
 
 total_row = pd.DataFrame({
     'Store': ['Total'],
-    'May Conversion% (Count)': [(total_may['WarrantyCount'] / total_may['TotalCount'] * 100).round(2) if total_may['TotalCount'] > 0 else 0],
-    'June Conversion% (Count)': [(total_june['WarrantyCount'] / total_june['TotalCount'] * 100).round(2) if total_june['TotalCount'] > 0 else 0],
-    'May Conversion% (Price)': [(total_may['WarrantyPrice'] / total_may['TotalSoldPrice'] * 100).round(2) if total_may['TotalSoldPrice'] > 0 else 0],
-    'June Conversion% (Price)': [(total_june['WarrantyPrice'] / total_june['TotalSoldPrice'] * 100).round(2) if total_june['TotalSoldPrice'] > 0 else 0],
-    'May AHSP': [(total_may['WarrantyPrice'] / total_may['WarrantyCount']).round(2) if total_may['WarrantyCount'] > 0 else 0],
-    'June AHSP': [(total_june['WarrantyPrice'] / total_june['WarrantyCount']).round(2) if total_june['WarrantyCount'] > 0 else 0],
-    'Count Conversion Change (%)': [
-        (total_june['WarrantyCount'] / total_june['TotalCount'] * 100 - total_may['WarrantyCount'] / total_may['TotalCount'] * 100).round(2) 
-        if total_june['TotalCount'] > 0 and total_may['TotalCount'] > 0 else 0
+    'July Conversion% (Count)': [(total_july['WarrantyCount'] / total_july['TotalCount'] * 100).round(2) if total_july['TotalCount'] > 0 else 0],
+    'August Conversion% (Count)': [(total_august['WarrantyCount'] / total_august['TotalCount'] * 100).round(2) if total_august['TotalCount'] > 0 else 0],
+    'September Conversion% (Count)': [(total_september['WarrantyCount'] / total_september['TotalCount'] * 100).round(2) if total_september['TotalCount'] > 0 else 0],
+    'July Conversion% (Price)': [(total_july['WarrantyPrice'] / total_july['TotalSoldPrice'] * 100).round(2) if total_july['TotalSoldPrice'] > 0 else 0],
+    'August Conversion% (Price)': [(total_august['WarrantyPrice'] / total_august['TotalSoldPrice'] * 100).round(2) if total_august['TotalSoldPrice'] > 0 else 0],
+    'September Conversion% (Price)': [(total_september['WarrantyPrice'] / total_september['TotalSoldPrice'] * 100).round(2) if total_september['TotalSoldPrice'] > 0 else 0],
+    'July AHSP': [(total_july['WarrantyPrice'] / total_july['WarrantyCount']).round(2) if total_july['WarrantyCount'] > 0 else 0],
+    'August AHSP': [(total_august['WarrantyPrice'] / total_august['WarrantyCount']).round(2) if total_august['WarrantyCount'] > 0 else 0],
+    'September AHSP': [(total_september['WarrantyPrice'] / total_september['WarrantyCount']).round(2) if total_september['WarrantyCount'] > 0 else 0],
+    'Count Conv Change Jul-Aug (%)': [
+        (total_august['WarrantyCount'] / total_august['TotalCount'] * 100 - total_july['WarrantyCount'] / total_july['TotalCount'] * 100).round(2) 
+        if total_august['TotalCount'] > 0 and total_july['TotalCount'] > 0 else 0
     ],
-    'Value Conversion Change (%)': [
-        (total_june['WarrantyPrice'] / total_june['TotalSoldPrice'] * 100 - total_may['WarrantyPrice'] / total_may['TotalSoldPrice'] * 100).round(2) 
-        if total_june['TotalSoldPrice'] > 0 and total_may['TotalSoldPrice'] > 0 else 0
+    'Count Conv Change Aug-Sep (%)': [
+        (total_september['WarrantyCount'] / total_september['TotalCount'] * 100 - total_august['WarrantyCount'] / total_august['TotalCount'] * 100).round(2) 
+        if total_september['TotalCount'] > 0 and total_august['TotalCount'] > 0 else 0
     ],
-    'AHSP Change (%)': [
-        ((total_june['WarrantyPrice'] / total_june['WarrantyCount'] - total_may['WarrantyPrice'] / total_may['WarrantyCount']) / 
-         (total_may['WarrantyPrice'] / total_may['WarrantyCount']) * 100).round(2) 
-        if total_may['WarrantyCount'] > 0 and total_june['WarrantyCount'] > 0 else 0
+    'Value Conv Change Jul-Aug (%)': [
+        (total_august['WarrantyPrice'] / total_august['TotalSoldPrice'] * 100 - total_july['WarrantyPrice'] / total_july['TotalSoldPrice'] * 100).round(2) 
+        if total_august['TotalSoldPrice'] > 0 and total_july['TotalSoldPrice'] > 0 else 0
+    ],
+    'Value Conv Change Aug-Sep (%)': [
+        (total_september['WarrantyPrice'] / total_september['TotalSoldPrice'] * 100 - total_august['WarrantyPrice'] / total_august['TotalSoldPrice'] * 100).round(2) 
+        if total_september['TotalSoldPrice'] > 0 and total_august['TotalSoldPrice'] > 0 else 0
+    ],
+    'AHSP Change Jul-Aug (%)': [
+        ((total_august['WarrantyPrice'] / total_august['WarrantyCount'] - total_july['WarrantyPrice'] / total_july['WarrantyCount']) / 
+         (total_july['WarrantyPrice'] / total_july['WarrantyCount']) * 100).round(2) 
+        if total_july['WarrantyCount'] > 0 and total_august['WarrantyCount'] > 0 else 0
+    ],
+    'AHSP Change Aug-Sep (%)': [
+        ((total_september['WarrantyPrice'] / total_september['WarrantyCount'] - total_august['WarrantyPrice'] / total_august['WarrantyCount']) / 
+         (total_august['WarrantyPrice'] / total_august['WarrantyCount']) * 100).round(2) 
+        if total_august['WarrantyCount'] > 0 and total_september['WarrantyCount'] > 0 else 0
     ]
 })
 
 # Prepare display dataframe
 store_display = store_conv_pivot.reset_index()
-store_display = store_display[['Store', 'May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP', 'Count Conversion Change (%)', 'Value Conversion Change (%)', 'AHSP Change (%)']]
+store_display = store_display[['Store', 'July Conversion% (Count)', 'August Conversion% (Count)', 'September Conversion% (Count)', 
+                              'July Conversion% (Price)', 'August Conversion% (Price)', 'September Conversion% (Price)', 
+                              'July AHSP', 'August AHSP', 'September AHSP', 
+                              'Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 
+                              'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 
+                              'AHSP Change Jul-Aug (%)', 'AHSP Change Aug-Sep (%)']]
 store_display = pd.concat([store_display, total_row], ignore_index=True)
-store_display['Total Change (%)'] = store_display[['Count Conversion Change (%)', 'Value Conversion Change (%)', 'AHSP Change (%)']].mean(axis=1).round(2)
-store_display.columns = ['Store', 'May Count Conv (%)', 'June Count Conv (%)', 'May Value Conv (%)', 'June Value Conv (%)', 'May AHSP (₹)', 'June AHSP (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)', 'Total Change (%)']
+store_display['Total Change (%)'] = store_display[['Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 
+                                                  'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 
+                                                  'AHSP Change Jul-Aug (%)', 'AHSP Change Aug-Sep (%)']].mean(axis=1).round(2)
+store_display.columns = ['Store', 'July Count Conv (%)', 'August Count Conv (%)', 'September Count Conv (%)', 
+                        'July Value Conv (%)', 'August Value Conv (%)', 'September Value Conv (%)', 
+                        'July AHSP (₹)', 'August AHSP (₹)', 'September AHSP (₹)', 
+                        'Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 
+                        'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 
+                        'AHSP Change Jul-Aug (%)', 'AHSP Change Aug-Sep (%)', 'Total Change (%)']
 store_display = store_display.fillna(0)
 
 def highlight_change(val):
@@ -535,17 +595,25 @@ def highlight_change(val):
     return f'color: {color}'
 
 st.dataframe(store_display.style.format({
-    'May Count Conv (%)': '{:.2f}%',
-    'June Count Conv (%)': '{:.2f}%',
-    'May Value Conv (%)': '{:.2f}%',
-    'June Value Conv (%)': '{:.2f}%',
-    'May AHSP (₹)': '₹{:.2f}',
-    'June AHSP (₹)': '₹{:.2f}',
-    'Count Conv Change (%)': '{:.2f}%',
-    'Value Conv Change (%)': '{:.2f}%',
-    'AHSP Change (%)': '{:.2f}%',
+    'July Count Conv (%)': '{:.2f}%',
+    'August Count Conv (%)': '{:.2f}%',
+    'September Count Conv (%)': '{:.2f}%',
+    'July Value Conv (%)': '{:.2f}%',
+    'August Value Conv (%)': '{:.2f}%',
+    'September Value Conv (%)': '{:.2f}%',
+    'July AHSP (₹)': '₹{:.2f}',
+    'August AHSP (₹)': '₹{:.2f}',
+    'September AHSP (₹)': '₹{:.2f}',
+    'Count Conv Change Jul-Aug (%)': '{:.2f}%',
+    'Count Conv Change Aug-Sep (%)': '{:.2f}%',
+    'Value Conv Change Jul-Aug (%)': '{:.2f}%',
+    'Value Conv Change Aug-Sep (%)': '{:.2f}%',
+    'AHSP Change Jul-Aug (%)': '{:.2f}%',
+    'AHSP Change Aug-Sep (%)': '{:.2f}%',
     'Total Change (%)': '{:.2f}%'
-}).applymap(highlight_change, subset=['Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)', 'Total Change (%)'])
+}).applymap(highlight_change, subset=['Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 
+                                     'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 
+                                     'AHSP Change Jul-Aug (%)', 'AHSP Change Aug-Sep (%)', 'Total Change (%)'])
 .set_properties(**{'font-weight': 'bold'}, subset=pd.IndexSlice[store_display.index[-1], :]), 
 use_container_width=True)
 
@@ -555,9 +623,9 @@ fig_store = px.bar(store_summary,
                    y='Conversion% (Count)', 
                    color='Month', 
                    barmode='group', 
-                   title='Store Count Conversion: May vs June',
+                   title='Store Count Conversion: July vs August vs September',
                    template='plotly_white',
-                   color_discrete_sequence=['#3730a3', '#06b6d4'])
+                   color_discrete_sequence=['#3730a3', '#06b6d4', '#10b981'])
 fig_store.update_layout(
     plot_bgcolor='rgba(0,0,0,0)',
     paper_bgcolor='rgba(0,0,0,0)',
@@ -589,38 +657,62 @@ rbm_pivot = rbm_summary.pivot_table(index='RBM', columns='Month', values=['Conve
 rbm_pivot.columns = [f"{col[1]} {col[0]}" for col in rbm_pivot.columns]
 
 # Ensure all required columns exist
-for col in ['May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP']:
+for col in ['July Conversion% (Count)', 'August Conversion% (Count)', 'September Conversion% (Count)', 
+            'July Conversion% (Price)', 'August Conversion% (Price)', 'September Conversion% (Price)', 
+            'July AHSP', 'August AHSP', 'September AHSP']:
     if col not in rbm_pivot.columns:
         rbm_pivot[col] = 0
 
 # Calculate changes
-rbm_pivot['Count Conversion Change (%)'] = (rbm_pivot['June Conversion% (Count)'] - rbm_pivot['May Conversion% (Count)']).round(2)
-rbm_pivot['Value Conversion Change (%)'] = (rbm_pivot['June Conversion% (Price)'] - rbm_pivot['May Conversion% (Price)']).round(2)
-rbm_pivot['AHSP Change (%)'] = ((rbm_pivot['June AHSP'] - rbm_pivot['May AHSP']) / rbm_pivot['May AHSP'] * 100).where(rbm_pivot['May AHSP'] > 0, 0).round(2)
-rbm_pivot = rbm_pivot.sort_values('Count Conversion Change (%)', ascending=False)
+rbm_pivot['Count Conv Change Jul-Aug (%)'] = (rbm_pivot['August Conversion% (Count)'] - rbm_pivot['July Conversion% (Count)']).round(2)
+rbm_pivot['Count Conv Change Aug-Sep (%)'] = (rbm_pivot['September Conversion% (Count)'] - rbm_pivot['August Conversion% (Count)']).round(2)
+rbm_pivot['Value Conv Change Jul-Aug (%)'] = (rbm_pivot['August Conversion% (Price)'] - rbm_pivot['July Conversion% (Price)']).round(2)
+rbm_pivot['Value Conv Change Aug-Sep (%)'] = (rbm_pivot['September Conversion% (Price)'] - rbm_pivot['August Conversion% (Price)']).round(2)
+rbm_pivot['AHSP Change Jul-Aug (%)'] = ((rbm_pivot['August AHSP'] - rbm_pivot['July AHSP']) / rbm_pivot['July AHSP'] * 100).where(rbm_pivot['July AHSP'] > 0, 0).round(2)
+rbm_pivot['AHSP Change Aug-Sep (%)'] = ((rbm_pivot['September AHSP'] - rbm_pivot['August AHSP']) / rbm_pivot['August AHSP'] * 100).where(rbm_pivot['August AHSP'] > 0, 0).round(2)
+rbm_pivot = rbm_pivot.sort_values('September Conversion% (Count)', ascending=False)
 
 if decreased_rbm_filter:
-    rbm_pivot = rbm_pivot[rbm_pivot['Count Conversion Change (%)'] < 0]
+    rbm_pivot = rbm_pivot[(rbm_pivot['Count Conv Change Jul-Aug (%)'] < 0) | (rbm_pivot['Count Conv Change Aug-Sep (%)'] < 0)]
     if rbm_pivot.empty:
         st.warning("No RBMs with decreased count conversion match the filters.")
 
 # Prepare display dataframe
 rbm_display = rbm_pivot.reset_index()
-rbm_display = rbm_display[['RBM', 'May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP', 'Count Conversion Change (%)', 'Value Conversion Change (%)', 'AHSP Change (%)']]
-rbm_display.columns = ['RBM', 'May Count Conv (%)', 'June Count Conv (%)', 'May Value Conv (%)', 'June Value Conv (%)', 'May AHSP (₹)', 'June AHSP (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)']
+rbm_display = rbm_display[['RBM', 'July Conversion% (Count)', 'August Conversion% (Count)', 'September Conversion% (Count)', 
+                          'July Conversion% (Price)', 'August Conversion% (Price)', 'September Conversion% (Price)', 
+                          'July AHSP', 'August AHSP', 'September AHSP', 
+                          'Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 
+                          'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 
+                          'AHSP Change Jul-Aug (%)', 'AHSP Change Aug-Sep (%)']]
+rbm_display.columns = ['RBM', 'July Count Conv (%)', 'August Count Conv (%)', 'September Count Conv (%)', 
+                       'July Value Conv (%)', 'August Value Conv (%)', 'September Value Conv (%)', 
+                       'July AHSP (₹)', 'August AHSP (₹)', 'September AHSP (₹)', 
+                       'Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 
+                       'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 
+                       'AHSP Change Jul-Aug (%)', 'AHSP Change Aug-Sep (%)']
 rbm_display = rbm_display.fillna(0)
 
 st.dataframe(rbm_display.style.format({
-    'May Count Conv (%)': '{:.2f}%',
-    'June Count Conv (%)': '{:.2f}%',
-    'May Value Conv (%)': '{:.2f}%',
-    'June Value Conv (%)': '{:.2f}%',
-    'May AHSP (₹)': '₹{:.2f}',
-    'June AHSP (₹)': '₹{:.2f}',
-    'Count Conv Change (%)': '{:.2f}%',
-    'Value Conv Change (%)': '{:.2f}%',
-    'AHSP Change (%)': '{:.2f}%'
-}).applymap(highlight_change, subset=['Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)']), use_container_width=True)
+    'July Count Conv (%)': '{:.2f}%',
+    'August Count Conv (%)': '{:.2f}%',
+    'September Count Conv (%)': '{:.2f}%',
+    'July Value Conv (%)': '{:.2f}%',
+    'August Value Conv (%)': '{:.2f}%',
+    'September Value Conv (%)': '{:.2f}%',
+    'July AHSP (₹)': '₹{:.2f}',
+    'August AHSP (₹)': '₹{:.2f}',
+    'September AHSP (₹)': '₹{:.2f}',
+    'Count Conv Change Jul-Aug (%)': '{:.2f}%',
+    'Count Conv Change Aug-Sep (%)': '{:.2f}%',
+    'Value Conv Change Jul-Aug (%)': '{:.2f}%',
+    'Value Conv Change Aug-Sep (%)': '{:.2f}%',
+    'AHSP Change Jul-Aug (%)': '{:.2f}%',
+    'AHSP Change Aug-Sep (%)': '{:.2f}%'
+}).applymap(highlight_change, subset=['Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 
+                                     'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 
+                                     'AHSP Change Jul-Aug (%)', 'AHSP Change Aug-Sep (%)']), 
+use_container_width=True)
 
 # Visualization
 fig_rbm = px.bar(rbm_summary, 
@@ -628,9 +720,9 @@ fig_rbm = px.bar(rbm_summary,
                  y='Conversion% (Count)', 
                  color='Month', 
                  barmode='group', 
-                 title='RBM Count Conversion: May vs June',
+                 title='RBM Count Conversion: July vs August vs September',
                  template='plotly_white',
-                 color_discrete_sequence=['#3730a3', '#06b6d4'])
+                 color_discrete_sequence=['#3730a3', '#06b6d4', '#10b981'])
 fig_rbm.update_layout(
     plot_bgcolor='rgba(0,0,0,0)',
     paper_bgcolor='rgba(0,0,0,0)',
@@ -663,33 +755,57 @@ if not category_summary.empty:
     category_pivot.columns = [f"{col[1]} {col[0]}" for col in category_pivot.columns]
 
     # Ensure all required columns exist
-    for col in ['May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP']:
+    for col in ['July Conversion% (Count)', 'August Conversion% (Count)', 'September Conversion% (Count)', 
+                'July Conversion% (Price)', 'August Conversion% (Price)', 'September Conversion% (Price)', 
+                'July AHSP', 'August AHSP', 'September AHSP']:
         if col not in category_pivot.columns:
             category_pivot[col] = 0
 
     # Calculate changes
-    category_pivot['Count Conversion Change (%)'] = (category_pivot['June Conversion% (Count)'] - category_pivot['May Conversion% (Count)']).round(2)
-    category_pivot['Value Conversion Change (%)'] = (category_pivot['June Conversion% (Price)'] - category_pivot['May Conversion% (Price)']).round(2)
-    category_pivot['AHSP Change (%)'] = ((category_pivot['June AHSP'] - category_pivot['May AHSP']) / category_pivot['May AHSP'] * 100).where(category_pivot['May AHSP'] > 0, 0).round(2)
-    category_pivot = category_pivot.sort_values('Count Conversion Change (%)', ascending=False)
+    category_pivot['Count Conv Change Jul-Aug (%)'] = (category_pivot['August Conversion% (Count)'] - category_pivot['July Conversion% (Count)']).round(2)
+    category_pivot['Count Conv Change Aug-Sep (%)'] = (category_pivot['September Conversion% (Count)'] - category_pivot['August Conversion% (Count)']).round(2)
+    category_pivot['Value Conv Change Jul-Aug (%)'] = (category_pivot['August Conversion% (Price)'] - category_pivot['July Conversion% (Price)']).round(2)
+    category_pivot['Value Conv Change Aug-Sep (%)'] = (category_pivot['September Conversion% (Price)'] - category_pivot['August Conversion% (Price)']).round(2)
+    category_pivot['AHSP Change Jul-Aug (%)'] = ((category_pivot['August AHSP'] - category_pivot['July AHSP']) / category_pivot['July AHSP'] * 100).where(category_pivot['July AHSP'] > 0, 0).round(2)
+    category_pivot['AHSP Change Aug-Sep (%)'] = ((category_pivot['September AHSP'] - category_pivot['August AHSP']) / category_pivot['August AHSP'] * 100).where(category_pivot['August AHSP'] > 0, 0).round(2)
+    category_pivot = category_pivot.sort_values('September Conversion% (Count)', ascending=False)
 
     # Prepare display dataframe
     category_display = category_pivot.reset_index()
-    category_display = category_display[[category_column, 'May Conversion% (Count)', 'June Conversion% (Count)', 'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP', 'Count Conversion Change (%)', 'Value Conversion Change (%)', 'AHSP Change (%)']]
-    category_display.columns = [category_column, 'May Count Conv (%)', 'June Count Conv (%)', 'May Value Conv (%)', 'June Value Conv (%)', 'May AHSP (₹)', 'June AHSP (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)']
+    category_display = category_display[[category_column, 'July Conversion% (Count)', 'August Conversion% (Count)', 'September Conversion% (Count)', 
+                                       'July Conversion% (Price)', 'August Conversion% (Price)', 'September Conversion% (Price)', 
+                                       'July AHSP', 'August AHSP', 'September AHSP', 
+                                       'Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 
+                                       'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 
+                                       'AHSP Change Jul-Aug (%)', 'AHSP Change Aug-Sep (%)']]
+    category_display.columns = [category_column, 'July Count Conv (%)', 'August Count Conv (%)', 'September Count Conv (%)', 
+                               'July Value Conv (%)', 'August Value Conv (%)', 'September Value Conv (%)', 
+                               'July AHSP (₹)', 'August AHSP (₹)', 'September AHSP (₹)', 
+                               'Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 
+                               'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 
+                               'AHSP Change Jul-Aug (%)', 'AHSP Change Aug-Sep (%)']
     category_display = category_display.fillna(0)
 
     st.dataframe(category_display.style.format({
-        'May Count Conv (%)': '{:.2f}%',
-        'June Count Conv (%)': '{:.2f}%',
-        'May Value Conv (%)': '{:.2f}%',
-        'June Value Conv (%)': '{:.2f}%',
-        'May AHSP (₹)': '₹{:.2f}',
-        'June AHSP (₹)': '₹{:.2f}',
-        'Count Conv Change (%)': '{:.2f}%',
-        'Value Conv Change (%)': '{:.2f}%',
-        'AHSP Change (%)': '{:.2f}%'
-    }).applymap(highlight_change, subset=['Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (%)']), use_container_width=True)
+        'July Count Conv (%)': '{:.2f}%',
+        'August Count Conv (%)': '{:.2f}%',
+        'September Count Conv (%)': '{:.2f}%',
+        'July Value Conv (%)': '{:.2f}%',
+        'August Value Conv (%)': '{:.2f}%',
+        'September Value Conv (%)': '{:.2f}%',
+        'July AHSP (₹)': '₹{:.2f}',
+        'August AHSP (₹)': '₹{:.2f}',
+        'September AHSP (₹)': '₹{:.2f}',
+        'Count Conv Change Jul-Aug (%)': '{:.2f}%',
+        'Count Conv Change Aug-Sep (%)': '{:.2f}%',
+        'Value Conv Change Jul-Aug (%)': '{:.2f}%',
+        'Value Conv Change Aug-Sep (%)': '{:.2f}%',
+        'AHSP Change Jul-Aug (%)': '{:.2f}%',
+        'AHSP Change Aug-Sep (%)': '{:.2f}%'
+    }).applymap(highlight_change, subset=['Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 
+                                         'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 
+                                         'AHSP Change Jul-Aug (%)', 'AHSP Change Aug-Sep (%)']), 
+    use_container_width=True)
 
     # Visualization
     fig_category = px.bar(category_summary, 
@@ -697,9 +813,9 @@ if not category_summary.empty:
                           y='Conversion% (Count)', 
                           color='Month', 
                           barmode='group', 
-                          title=f'{category_column} Count Conversion: May vs June',
+                          title=f'{category_column} Count Conversion: July vs August vs September',
                           template='plotly_white',
-                          color_discrete_sequence=['#3730a3', '#06b6d4'])
+                          color_discrete_sequence=['#3730a3', '#06b6d4', '#10b981'])
     fig_category.update_layout(
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
@@ -723,58 +839,70 @@ TARGET_AHSP = 1000.0  # Example target, adjust as needed
 
 # Overall performance change and target comparison
 with st.expander("Overall Performance Change & Target Comparison", expanded=True):
-    if june_count_conversion >= TARGET_COUNT_CONVERSION:
-        st.success(f"June Count Conversion ({june_count_conversion:.2f}%) meets or exceeds target ({TARGET_COUNT_CONVERSION}%).")
+    if september_count_conversion >= TARGET_COUNT_CONVERSION:
+        st.success(f"September Count Conversion ({september_count_conversion:.2f}%) meets or exceeds target ({TARGET_COUNT_CONVERSION}%).")
     else:
-        st.warning(f"June Count Conversion ({june_count_conversion:.2f}%) is below target ({TARGET_COUNT_CONVERSION}%). Gap: {TARGET_COUNT_CONVERSION - june_count_conversion:.2f}%.")
-    if june_count_conversion > may_count_conversion:
-        st.success(f"Count Conversion improved from {may_count_conversion:.2f}% in May to {june_count_conversion:.2f}% in June.")
+        st.warning(f"September Count Conversion ({september_count_conversion:.2f}%) is below target ({TARGET_COUNT_CONVERSION}%). Gap: {TARGET_COUNT_CONVERSION - september_count_conversion:.2f}%.")
+    if september_count_conversion > august_count_conversion:
+        st.success(f"Count Conversion improved from {august_count_conversion:.2f}% in August to {september_count_conversion:.2f}% in September.")
+    elif september_count_conversion > july_count_conversion:
+        st.info(f"Count Conversion improved from {july_count_conversion:.2f}% in July to {september_count_conversion:.2f}% in September, but monitor August's dip ({august_count_conversion:.2f}%).")
     else:
-        st.warning(f"Count Conversion declined from {may_count_conversion:.2f}% in May to {june_count_conversion:.2f}% in June.")
+        st.warning(f"Count Conversion declined or remained flat from {july_count_conversion:.2f}% (July) and {august_count_conversion:.2f}% (August) to {september_count_conversion:.2f}% in September.")
 
-    if june_value_conversion >= TARGET_VALUE_CONVERSION:
-        st.success(f"June Value Conversion ({june_value_conversion:.2f}%) meets or exceeds target ({TARGET_VALUE_CONVERSION}%).")
+    if september_value_conversion >= TARGET_VALUE_CONVERSION:
+        st.success(f"September Value Conversion ({september_value_conversion:.2f}%) meets or exceeds target ({TARGET_VALUE_CONVERSION}%).")
     else:
-        st.warning(f"June Value Conversion ({june_value_conversion:.2f}%) is below target ({TARGET_VALUE_CONVERSION}%). Gap: {TARGET_VALUE_CONVERSION - june_value_conversion:.2f}%.")
-    if june_value_conversion > may_value_conversion:
-        st.success(f"Value Conversion improved from {may_value_conversion:.2f}% in May to {june_value_conversion:.2f}% in June.")
+        st.warning(f"September Value Conversion ({september_value_conversion:.2f}%) is below target ({TARGET_VALUE_CONVERSION}%). Gap: {TARGET_VALUE_CONVERSION - september_value_conversion:.2f}%.")
+    if september_value_conversion > august_value_conversion:
+        st.success(f"Value Conversion improved from {august_value_conversion:.2f}% in August to {september_value_conversion:.2f}% in September.")
+    elif september_value_conversion > july_value_conversion:
+        st.info(f"Value Conversion improved from {july_value_conversion:.2f}% in July to {september_value_conversion:.2f}% in September, but monitor August's dip ({august_value_conversion:.2f}%).")
     else:
-        st.warning(f"Value Conversion declined from {may_value_conversion:.2f}% in May to {june_value_conversion:.2f}% in June.")
+        st.warning(f"Value Conversion declined or remained flat from {july_value_conversion:.2f}% (July) and {august_value_conversion:.2f}% (August) to {september_value_conversion:.2f}% in September.")
 
-    if june_ahsp >= TARGET_AHSP:
-        st.success(f"June AHSP (₹{june_ahsp:,.2f}) meets or exceeds target (₹{TARGET_AHSP:,.2f}).")
+    if september_ahsp >= TARGET_AHSP:
+        st.success(f"September AHSP (₹{september_ahsp:,.2f}) meets or exceeds target (₹{TARGET_AHSP:,.2f}).")
     else:
-        st.warning(f"June AHSP (₹{june_ahsp:,.2f}) is below target (₹{TARGET_AHSP:,.2f}). Gap: ₹{TARGET_AHSP - june_ahsp:,.2f}.")
-    if june_ahsp > may_ahsp:
-        st.success(f"AHSP improved from ₹{may_ahsp:,.2f} in May to ₹{june_ahsp:,.2f} in June.")
+        st.warning(f"September AHSP (₹{september_ahsp:,.2f}) is below target (₹{TARGET_AHSP:,.2f}). Gap: ₹{TARGET_AHSP - september_ahsp:,.2f}.")
+    if september_ahsp > august_ahsp:
+        st.success(f"AHSP improved from ₹{august_ahsp:,.2f} in August to ₹{september_ahsp:,.2f} in September.")
+    elif september_ahsp > july_ahsp:
+        st.info(f"AHSP improved from ₹{july_ahsp:,.2f} in July to ₹{september_ahsp:,.2f} in September, but monitor August's dip (₹{august_ahsp:,.2f}).")
     else:
-        st.warning(f"AHSP declined from ₹{may_ahsp:,.2f} in May to ₹{june_ahsp:,.2f} in June.")
+        st.warning(f"AHSP declined or remained flat from ₹{july_ahsp:,.2f} (July) and ₹{august_ahsp:,.2f} (August) to ₹{september_ahsp:,.2f} in September.")
 
 # Store-Level Warranty Sales Analysis
 with st.expander("Store-Level Warranty Sales Analysis", expanded=True):
     store_warranty = filtered_df.groupby(['Store', 'Month'])['WarrantyPrice'].sum().reset_index()
     store_pivot = store_warranty.pivot_table(index='Store', columns='Month', values='WarrantyPrice', aggfunc='first').fillna(0)
-    store_pivot['Change (₹)'] = store_pivot['June'] - store_pivot['May']
-    store_pivot['Change (%)'] = ((store_pivot['June'] - store_pivot['May']) / store_pivot['May'] * 100).where(store_pivot['May'] > 0, 0).round(2)
-    store_pivot = store_pivot.sort_values('Change (%)', ascending=False).reset_index()
+    store_pivot['Change Jul-Aug (₹)'] = store_pivot['August'] - store_pivot['July']
+    store_pivot['Change Aug-Sep (₹)'] = store_pivot['September'] - store_pivot['August']
+    store_pivot['Change Jul-Aug (%)'] = ((store_pivot['August'] - store_pivot['July']) / store_pivot['July'] * 100).where(store_pivot['July'] > 0, 0).round(2)
+    store_pivot['Change Aug-Sep (%)'] = ((store_pivot['September'] - store_pivot['August']) / store_pivot['August'] * 100).where(store_pivot['August'] > 0, 0).round(2)
+    store_pivot = store_pivot.sort_values('Change Aug-Sep (%)', ascending=False).reset_index()
 
     if not store_pivot.empty:
-        st.write("Warranty sales comparison between May and June for each store:")
-        display_df = store_pivot[['Store', 'May', 'June', 'Change (₹)', 'Change (%)']]
-        display_df.columns = ['Store', 'May Warranty Sales (₹)', 'June Warranty Sales (₹)', 'Change (₹)', 'Change (%)']
+        st.write("Warranty sales comparison between July, August, and September for each store:")
+        display_df = store_pivot[['Store', 'July', 'August', 'September', 'Change Jul-Aug (₹)', 'Change Aug-Sep (₹)', 'Change Jul-Aug (%)', 'Change Aug-Sep (%)']]
+        display_df.columns = ['Store', 'July Warranty Sales (₹)', 'August Warranty Sales (₹)', 'September Warranty Sales (₹)', 'Change Jul-Aug (₹)', 'Change Aug-Sep (₹)', 'Change Jul-Aug (%)', 'Change Aug-Sep (%)']
         st.dataframe(display_df.style.format({
-            'May Warranty Sales (₹)': '₹{:.0f}',
-            'June Warranty Sales (₹)': '₹{:.0f}',
-            'Change (₹)': '₹{:.0f}',
-            'Change (%)': '{:.2f}%'
-        }).applymap(highlight_change, subset=['Change (₹)', 'Change (%)']), use_container_width=True)
+            'July Warranty Sales (₹)': '₹{:.0f}',
+            'August Warranty Sales (₹)': '₹{:.0f}',
+            'September Warranty Sales (₹)': '₹{:.0f}',
+            'Change Jul-Aug (₹)': '₹{:.0f}',
+            'Change Aug-Sep (₹)': '₹{:.0f}',
+            'Change Jul-Aug (%)': '{:.2f}%',
+            'Change Aug-Sep (%)': '{:.2f}%'
+        }).applymap(highlight_change, subset=['Change Jul-Aug (₹)', 'Change Aug-Sep (₹)', 'Change Jul-Aug (%)', 'Change Aug-Sep (%)']), use_container_width=True)
 
         st.write("**Reasons for Warranty Sales Decreases:**")
-        decreased_stores = store_pivot[store_pivot['Change (%)'] < 0]
+        decreased_stores = store_pivot[(store_pivot['Change Jul-Aug (%)'] < 0) | (store_pivot['Change Aug-Sep (%)'] < 0)]
         if not decreased_stores.empty:
             category_warranty = filtered_df.groupby(['Store', 'Month', category_column])['WarrantyPrice'].sum().reset_index()
             category_pivot_warranty = category_warranty.pivot_table(index=['Store', category_column], columns='Month', values='WarrantyPrice', aggfunc='first').fillna(0)
-            category_pivot_warranty['Change (₹)'] = category_pivot_warranty['June'] - category_pivot_warranty['May']
+            category_pivot_warranty['Change Jul-Aug (₹)'] = category_pivot_warranty['August'] - category_pivot_warranty['July']
+            category_pivot_warranty['Change Aug-Sep (₹)'] = category_pivot_warranty['September'] - category_pivot_warranty['August']
             
             store_metrics = filtered_df.groupby(['Store', 'Month']).agg({
                 'TotalSoldPrice': 'sum',
@@ -787,33 +915,42 @@ with st.expander("Store-Level Warranty Sales Analysis", expanded=True):
             
             for _, row in decreased_stores.iterrows():
                 store = row['Store']
-                change_amt = row['Change (₹)']
-                change_pct = row['Change (%)']
-                
-                st.write(f"**{store} (Decrease: ₹{abs(change_amt):,.0f}, {change_pct:.2f}%):**")
+                st.write(f"**{store}:**")
                 reasons = []
                 
                 store_cat = category_pivot_warranty.loc[store] if store in category_pivot_warranty.index.get_level_values(0) else pd.DataFrame()
                 if not store_cat.empty:
-                    decreased_cats = store_cat[store_cat['Change (₹)'] < 0]
+                    decreased_cats = store_cat[(store_cat['Change Jul-Aug (₹)'] < 0) | (store_cat['Change Aug-Sep (₹)'] < 0)]
                     for cat, cat_row in decreased_cats.iterrows():
-                        reasons.append(f"{cat} warranty sales decreased by ₹{abs(cat_row['Change (₹)']):,.0f}.")
+                        if cat_row['Change Jul-Aug (₹)'] < 0:
+                            reasons.append(f"{cat} warranty sales decreased by ₹{abs(cat_row['Change Jul-Aug (₹)']):,.0f} from July to August.")
+                        if cat_row['Change Aug-Sep (₹)'] < 0:
+                            reasons.append(f"{cat} warranty sales decreased by ₹{abs(cat_row['Change Aug-Sep (₹)']):,.0f} from August to September.")
                 
                 if store in metrics_pivot.index:
-                    may_total_sales = metrics_pivot.loc[store, 'May TotalSoldPrice']
-                    june_total_sales = metrics_pivot.loc[store, 'June TotalSoldPrice']
-                    if june_total_sales > may_total_sales:
-                        reasons.append(f"Total sales increased (₹{june_total_sales:,.0f} vs. ₹{may_total_sales:,.0f}), potentially diluting warranty sales.")
+                    july_total_sales = metrics_pivot.loc[store, 'July TotalSoldPrice']
+                    august_total_sales = metrics_pivot.loc[store, 'August TotalSoldPrice']
+                    september_total_sales = metrics_pivot.loc[store, 'September TotalSoldPrice']
+                    if august_total_sales > july_total_sales:
+                        reasons.append(f"Total sales increased (₹{august_total_sales:,.0f} vs. ₹{july_total_sales:,.0f}) from July to August, potentially diluting warranty sales.")
+                    if september_total_sales > august_total_sales:
+                        reasons.append(f"Total sales increased (₹{september_total_sales:,.0f} vs. ₹{august_total_sales:,.0f}) from August to September, potentially diluting warranty sales.")
                     
-                    may_warranty_count = metrics_pivot.loc[store, 'May WarrantyCount']
-                    june_warranty_count = metrics_pivot.loc[store, 'June WarrantyCount']
-                    if june_warranty_count < may_warranty_count:
-                        reasons.append(f"Fewer warranty units sold ({june_warranty_count:.0f} vs. {may_warranty_count:.0f}).")
+                    july_warranty_count = metrics_pivot.loc[store, 'July WarrantyCount']
+                    august_warranty_count = metrics_pivot.loc[store, 'August WarrantyCount']
+                    september_warranty_count = metrics_pivot.loc[store, 'September WarrantyCount']
+                    if august_warranty_count < july_warranty_count:
+                        reasons.append(f"Fewer warranty units sold ({august_warranty_count:.0f} vs. {july_warranty_count:.0f}) from July to August.")
+                    if september_warranty_count < august_warranty_count:
+                        reasons.append(f"Fewer warranty units sold ({september_warranty_count:.0f} vs. {august_warranty_count:.0f}) from August to September.")
                     
-                    may_ahsp = metrics_pivot.loc[store, 'May AHSP']
-                    june_ahsp = metrics_pivot.loc[store, 'June AHSP']
-                    if june_ahsp < may_ahsp:
-                        reasons.append(f"Lower average warranty selling price (₹{june_ahsp:,.2f} vs. ₹{may_ahsp:,.2f}).")
+                    july_ahsp = metrics_pivot.loc[store, 'July AHSP']
+                    august_ahsp = metrics_pivot.loc[store, 'August AHSP']
+                    september_ahsp = metrics_pivot.loc[store, 'September AHSP']
+                    if august_ahsp < july_ahsp:
+                        reasons.append(f"Lower average warranty selling price (₹{august_ahsp:,.2f} vs. ₹{july_ahsp:,.2f}) from July to August.")
+                    if september_ahsp < august_ahsp:
+                        reasons.append(f"Lower average warranty selling price (₹{september_ahsp:,.2f} vs. ₹{august_ahsp:,.2f}) from August to September.")
                 
                 if reasons:
                     for reason in reasons:
@@ -831,56 +968,68 @@ with st.expander("Store-Level Warranty Sales Analysis", expanded=True):
 
 # Significant Changes
 with st.expander("Significant Changes", expanded=True):
-    significant_stores = store_conv_pivot[abs(store_conv_pivot['Count Conversion Change (%)']) > 2]
+    significant_stores = store_conv_pivot[(abs(store_conv_pivot['Count Conv Change Jul-Aug (%)']) > 2) | (abs(store_conv_pivot['Count Conv Change Aug-Sep (%)']) > 2)]
     if not significant_stores.empty:
         st.write("**Stores with Significant Count Conversion Changes:**")
         for store in significant_stores.index:
-            change = float(store_conv_pivot.loc[store, 'Count Conversion Change (%)'])
-            st.write(f"- {store}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
+            change_jul_aug = float(store_conv_pivot.loc[store, 'Count Conv Change Jul-Aug (%)'])
+            change_aug_sep = float(store_conv_pivot.loc[store, 'Count Conv Change Aug-Sep (%)'])
+            if abs(change_jul_aug) > 2:
+                st.write(f"- {store}: {change_jul_aug:.2f}% {'increase' if change_jul_aug > 0 else 'decrease'} from July to August")
+            if abs(change_aug_sep) > 2:
+                st.write(f"- {store}: {change_aug_sep:.2f}% {'increase' if change_aug_sep > 0 else 'decrease'} from August to September")
 
-    significant_rbms = rbm_pivot[abs(rbm_pivot['Count Conversion Change (%)']) > 2]
+    significant_rbms = rbm_pivot[(abs(rbm_pivot['Count Conv Change Jul-Aug (%)']) > 2) | (abs(rbm_pivot['Count Conv Change Aug-Sep (%)']) > 2)]
     if not significant_rbms.empty:
         st.write("**RBMs with Significant Count Conversion Changes:**")
         for rbm in significant_rbms.index:
-            change = float(rbm_pivot.loc[rbm, 'Count Conversion Change (%)'])
-            st.write(f"- {rbm}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
+            change_jul_aug = float(rbm_pivot.loc[rbm, 'Count Conv Change Jul-Aug (%)'])
+            change_aug_sep = float(rbm_pivot.loc[rbm, 'Count Conv Change Aug-Sep (%)'])
+            if abs(change_jul_aug) > 2:
+                st.write(f"- {rbm}: {change_jul_aug:.2f}% {'increase' if change_jul_aug > 0 else 'decrease'} from July to August")
+            if abs(change_aug_sep) > 2:
+                st.write(f"- {rbm}: {change_aug_sep:.2f}% {'increase' if change_aug_sep > 0 else 'decrease'} from August to September")
 
     if not category_pivot.empty:
-        significant_categories = category_pivot[abs(category_pivot['Count Conversion Change (%)']) > 2]
+        significant_categories = category_pivot[(abs(category_pivot['Count Conv Change Jul-Aug (%)']) > 2) | (abs(category_pivot['Count Conv Change Aug-Sep (%)']) > 2)]
         if not significant_categories.empty:
             st.write(f"**{category_column} with Significant Count Conversion Changes:**")
             for category in significant_categories.index:
-                change = float(category_pivot.loc[category, 'Count Conversion Change (%)'])
-                st.write(f"- {category}: {change:.2f}% {'increase' if change > 0 else 'decrease'}")
+                change_jul_aug = float(category_pivot.loc[category, 'Count Conv Change Jul-Aug (%)'])
+                change_aug_sep = float(category_pivot.loc[category, 'Count Conv Change Aug-Sep (%)'])
+                if abs(change_jul_aug) > 2:
+                    st.write(f"- {category}: {change_jul_aug:.2f}% {'increase' if change_jul_aug > 0 else 'decrease'} from July to August")
+                if abs(change_aug_sep) > 2:
+                    st.write(f"- {category}: {change_aug_sep:.2f}% {'increase' if change_aug_sep > 0 else 'decrease'} from August to September")
     else:
         st.info("No significant item category changes with current filters.")
 
 # Improvement Opportunities
-with st.expander("Improvement Opportunities (June)", expanded=True):
-    low_count_performers = store_summary[(store_summary['Month'] == 'June') & (store_summary['Conversion% (Count)'] < TARGET_COUNT_CONVERSION)]
-    low_value_performers = store_summary[(store_summary['Month'] == 'June') & (store_summary['Conversion% (Price)'] < TARGET_VALUE_CONVERSION)]
-    low_ahsp_performers = store_summary[(store_summary['Month'] == 'June') & (store_summary['AHSP'] < TARGET_AHSP)]
+with st.expander("Improvement Opportunities (September)", expanded=True):
+    low_count_performers = store_summary[(store_summary['Month'] == 'September') & (store_summary['Conversion% (Count)'] < TARGET_COUNT_CONVERSION)]
+    low_value_performers = store_summary[(store_summary['Month'] == 'September') & (store_summary['Conversion% (Price)'] < TARGET_VALUE_CONVERSION)]
+    low_ahsp_performers = store_summary[(store_summary['Month'] == 'September') & (store_summary['AHSP'] < TARGET_AHSP)]
     
     if not low_count_performers.empty:
-        st.write(f"These stores in June have below-target count conversion (target: {TARGET_COUNT_CONVERSION}%):")
+        st.write(f"These stores in September have below-target count conversion (target: {TARGET_COUNT_CONVERSION}%):")
         for _, row in low_count_performers.iterrows():
             st.write(f"- {row['Store']}: {row['Conversion% (Count)']:.2f}%")
     else:
-        st.success(f"All stores meet or exceed the count conversion target ({TARGET_COUNT_CONVERSION}%) in June.")
+        st.success(f"All stores meet or exceed the count conversion target ({TARGET_COUNT_CONVERSION}%) in September.")
 
     if not low_value_performers.empty:
-        st.write(f"These stores in June have below-target value conversion (target: {TARGET_VALUE_CONVERSION}%):")
+        st.write(f"These stores in September have below-target value conversion (target: {TARGET_VALUE_CONVERSION}%):")
         for _, row in low_value_performers.iterrows():
             st.write(f"- {row['Store']}: {row['Conversion% (Price)']:.2f}%")
     else:
-        st.success(f"All stores meet or exceed the value conversion target ({TARGET_VALUE_CONVERSION}%) in June.")
+        st.success(f"All stores meet or exceed the value conversion target ({TARGET_VALUE_CONVERSION}%) in September.")
 
     if not low_ahsp_performers.empty:
-        st.write(f"These stores in June have below-target AHSP (target: ₹{TARGET_AHSP:,.2f}):")
+        st.write(f"These stores in September have below-target AHSP (target: ₹{TARGET_AHSP:,.2f}):")
         for _, row in low_ahsp_performers.iterrows():
             st.write(f"- {row['Store']}: ₹{row['AHSP']:,.2f}")
     else:
-        st.success(f"All stores meet or exceed the AHSP target (₹{TARGET_AHSP:,.2f}) in June.")
+        st.success(f"All stores meet or exceed the AHSP target (₹{TARGET_AHSP:,.2f}) in September.")
 
     if not low_count_performers.empty or not low_value_performers.empty or not low_ahsp_performers.empty:
         st.write("**Recommendations:**")
@@ -908,31 +1057,38 @@ if future_filter or any('FUTURE' in store for store in filtered_df['Store'].uniq
             future_summary['Conversion% (Count)'] = (future_summary['WarrantyCount'] / future_summary['TotalCount'] * 100).round(2)
             future_summary['Conversion% (Price)'] = (future_summary['WarrantyPrice'] / future_summary['TotalSoldPrice'] * 100).round(2)
             
-            may_future = future_summary[future_summary['Month'] == 'May']
-            june_future = future_summary[future_summary['Month'] == 'June']
+            july_future = future_summary[future_summary['Month'] == 'July']
+            august_future = future_summary[future_summary['Month'] == 'August']
+            september_future = future_summary[future_summary['Month'] == 'September']
             
-            may_future_count = may_future['Conversion% (Count)'].iloc[0] if not may_future.empty else 0
-            june_future_count = june_future['Conversion% (Count)'].iloc[0] if not june_future.empty else 0
-            may_future_value = may_future['Conversion% (Price)'].iloc[0] if not may_future.empty else 0
-            june_future_value = june_future['Conversion% (Price)'].iloc[0] if not june_future.empty else 0
-            may_future_ahsp = may_future['AHSP'].iloc[0] if not may_future.empty else 0
-            june_future_ahsp = june_future['AHSP'].iloc[0] if not june_future.empty else 0
+            july_future_count = july_future['Conversion% (Count)'].iloc[0] if not july_future.empty else 0
+            august_future_count = august_future['Conversion% (Count)'].iloc[0] if not august_future.empty else 0
+            september_future_count = september_future['Conversion% (Count)'].iloc[0] if not september_future.empty else 0
+            july_future_value = july_future['Conversion% (Price)'].iloc[0] if not july_future.empty else 0
+            august_future_value = august_future['Conversion% (Price)'].iloc[0] if not august_future.empty else 0
+            september_future_value = september_future['Conversion% (Price)'].iloc[0] if not september_future.empty else 0
+            july_future_ahsp = july_future['AHSP'].iloc[0] if not july_future.empty else 0
+            august_future_ahsp = august_future['AHSP'].iloc[0] if not august_future.empty else 0
+            september_future_ahsp = september_future['AHSP'].iloc[0] if not september_future.empty else 0
             
-            st.write(f"Average count conversion in FUTURE stores (May): {may_future_count:.2f}%")
-            st.write(f"Average count conversion in FUTURE stores (June): {june_future_count:.2f}%")
-            st.write(f"Average value conversion in FUTURE stores (May): {may_future_value:.2f}%")
-            st.write(f"Average value conversion in FUTURE stores (June): {june_future_value:.2f}%")
-            st.write(f"Average AHSP in FUTURE stores (May): ₹{may_future_ahsp:,.2f}")
-            st.write(f"Average AHSP in FUTURE stores (June): ₹{june_future_ahsp:,.2f}")
+            st.write(f"Average count conversion in FUTURE stores (July): {july_future_count:.2f}%")
+            st.write(f"Average count conversion in FUTURE stores (August): {august_future_count:.2f}%")
+            st.write(f"Average count conversion in FUTURE stores (September): {september_future_count:.2f}%")
+            st.write(f"Average value conversion in FUTURE stores (July): {july_future_value:.2f}%")
+            st.write(f"Average value conversion in FUTURE stores (August): {august_future_value:.2f}%")
+            st.write(f"Average value conversion in FUTURE stores (September): {september_future_value:.2f}%")
+            st.write(f"Average AHSP in FUTURE stores (July): ₹{july_future_ahsp:,.2f}")
+            st.write(f"Average AHSP in FUTURE stores (August): ₹{august_future_ahsp:,.2f}")
+            st.write(f"Average AHSP in FUTURE stores (September): ₹{september_future_ahsp:,.2f}")
             
-            if june_future_count < TARGET_COUNT_CONVERSION or june_future_value < TARGET_VALUE_CONVERSION or june_future_ahsp < TARGET_AHSP:
-                st.warning("FUTURE stores are below target in June.")
+            if september_future_count < TARGET_COUNT_CONVERSION or september_future_value < TARGET_VALUE_CONVERSION or september_future_ahsp < TARGET_AHSP:
+                st.warning("FUTURE stores are below target in September.")
                 st.write("**Recommendations:**")
                 st.write("- Conduct store-specific training to boost conversion rates.")
                 st.write("- Analyze customer demographics for targeted promotions.")
                 st.write("- Review warranty pricing strategy to improve AHSP.")
             else:
-                st.success("FUTURE stores meet or exceed targets in June!")
+                st.success("FUTURE stores meet or exceed targets in September!")
         else:
             st.info("No FUTURE stores in current selection")
 
@@ -961,44 +1117,56 @@ if replacement_filter:
         replacement_pivot.columns = [f"{col[1]} {col[0]}" for col in replacement_pivot.columns]
         
         # Calculate changes
-        replacement_pivot['Warranty Sales Change (₹)'] = replacement_pivot['June WarrantyPrice'] - replacement_pivot['May WarrantyPrice']
-        replacement_pivot['Count Conversion Change (%)'] = replacement_pivot['June Conversion% (Count)'] - replacement_pivot['May Conversion% (Count)']
-        replacement_pivot['Value Conversion Change (%)'] = replacement_pivot['June Conversion% (Price)'] - replacement_pivot['May Conversion% (Price)']
-        replacement_pivot['AHSP Change (₹)'] = replacement_pivot['June AHSP'] - replacement_pivot['May AHSP']
+        replacement_pivot['Warranty Sales Change Jul-Aug (₹)'] = replacement_pivot['August WarrantyPrice'] - replacement_pivot['July WarrantyPrice']
+        replacement_pivot['Warranty Sales Change Aug-Sep (₹)'] = replacement_pivot['September WarrantyPrice'] - replacement_pivot['August WarrantyPrice']
+        replacement_pivot['Count Conversion Change Jul-Aug (%)'] = replacement_pivot['August Conversion% (Count)'] - replacement_pivot['July Conversion% (Count)']
+        replacement_pivot['Count Conversion Change Aug-Sep (%)'] = replacement_pivot['September Conversion% (Count)'] - replacement_pivot['August Conversion% (Count)']
+        replacement_pivot['Value Conversion Change Jul-Aug (%)'] = replacement_pivot['August Conversion% (Price)'] - replacement_pivot['July Conversion% (Price)']
+        replacement_pivot['Value Conversion Change Aug-Sep (%)'] = replacement_pivot['September Conversion% (Price)'] - replacement_pivot['August Conversion% (Price)']
+        replacement_pivot['AHSP Change Jul-Aug (₹)'] = replacement_pivot['August AHSP'] - replacement_pivot['July AHSP']
+        replacement_pivot['AHSP Change Aug-Sep (₹)'] = replacement_pivot['September AHSP'] - replacement_pivot['August AHSP']
         
         # Prepare display
-        display_cols = ['May WarrantyPrice', 'June WarrantyPrice', 'Warranty Sales Change (₹)',
-                       'May Conversion% (Count)', 'June Conversion% (Count)', 'Count Conversion Change (%)',
-                       'May Conversion% (Price)', 'June Conversion% (Price)', 'Value Conversion Change (%)',
-                       'May AHSP', 'June AHSP', 'AHSP Change (₹)']
+        display_cols = ['July WarrantyPrice', 'August WarrantyPrice', 'September WarrantyPrice', 'Warranty Sales Change Jul-Aug (₹)', 'Warranty Sales Change Aug-Sep (₹)',
+                       'July Conversion% (Count)', 'August Conversion% (Count)', 'September Conversion% (Count)', 'Count Conversion Change Jul-Aug (%)', 'Count Conversion Change Aug-Sep (%)',
+                       'July Conversion% (Price)', 'August Conversion% (Price)', 'September Conversion% (Price)', 'Value Conversion Change Jul-Aug (%)', 'Value Conversion Change Aug-Sep (%)',
+                       'July AHSP', 'August AHSP', 'September AHSP', 'AHSP Change Jul-Aug (₹)', 'AHSP Change Aug-Sep (₹)']
         
         display_df = replacement_pivot[display_cols].reset_index()
-        display_df.columns = ['Replacement Category', 'May Warranty (₹)', 'June Warranty (₹)', 'Warranty Change (₹)',
-                             'May Count Conv (%)', 'June Count Conv (%)', 'Count Conv Change (%)',
-                             'May Value Conv (%)', 'June Value Conv (%)', 'Value Conv Change (%)',
-                             'May AHSP (₹)', 'June AHSP (₹)', 'AHSP Change (₹)']
+        display_df.columns = ['Replacement Category', 'July Warranty (₹)', 'August Warranty (₹)', 'September Warranty (₹)', 'Warranty Change Jul-Aug (₹)', 'Warranty Change Aug-Sep (₹)',
+                             'July Count Conv (%)', 'August Count Conv (%)', 'September Count Conv (%)', 'Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)',
+                             'July Value Conv (%)', 'August Value Conv (%)', 'September Value Conv (%)', 'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)',
+                             'July AHSP (₹)', 'August AHSP (₹)', 'September AHSP (₹)', 'AHSP Change Jul-Aug (₹)', 'AHSP Change Aug-Sep (₹)']
         
         def highlight_replacement_change(val, column):
-            if column in ['Warranty Change (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (₹)']:
+            if column in ['Warranty Change Jul-Aug (₹)', 'Warranty Change Aug-Sep (₹)', 'Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 'AHSP Change Jul-Aug (₹)', 'AHSP Change Aug-Sep (₹)']:
                 return 'color: green' if val > 0 else 'color: red' if val < 0 else 'color: black'
             return ''
         
         styled_df = display_df.style.format({
-            'May Warranty (₹)': '₹{:.0f}',
-            'June Warranty (₹)': '₹{:.0f}',
-            'Warranty Change (₹)': '₹{:.0f}',
-            'May Count Conv (%)': '{:.2f}%',
-            'June Count Conv (%)': '{:.2f}%',
-            'Count Conv Change (%)': '{:.2f}%',
-            'May Value Conv (%)': '{:.2f}%',
-            'June Value Conv (%)': '{:.2f}%',
-            'Value Conv Change (%)': '{:.2f}%',
-            'May AHSP (₹)': '₹{:.2f}',
-            'June AHSP (₹)': '₹{:.2f}',
-            'AHSP Change (₹)': '₹{:.2f}'
+            'July Warranty (₹)': '₹{:.0f}',
+            'August Warranty (₹)': '₹{:.0f}',
+            'September Warranty (₹)': '₹{:.0f}',
+            'Warranty Change Jul-Aug (₹)': '₹{:.0f}',
+            'Warranty Change Aug-Sep (₹)': '₹{:.0f}',
+            'July Count Conv (%)': '{:.2f}%',
+            'August Count Conv (%)': '{:.2f}%',
+            'September Count Conv (%)': '{:.2f}%',
+            'Count Conv Change Jul-Aug (%)': '{:.2f}%',
+            'Count Conv Change Aug-Sep (%)': '{:.2f}%',
+            'July Value Conv (%)': '{:.2f}%',
+            'August Value Conv (%)': '{:.2f}%',
+            'September Value Conv (%)': '{:.2f}%',
+            'Value Conv Change Jul-Aug (%)': '{:.2f}%',
+            'Value Conv Change Aug-Sep (%)': '{:.2f}%',
+            'July AHSP (₹)': '₹{:.2f}',
+            'August AHSP (₹)': '₹{:.2f}',
+            'September AHSP (₹)': '₹{:.2f}',
+            'AHSP Change Jul-Aug (₹)': '₹{:.2f}',
+            'AHSP Change Aug-Sep (₹)': '₹{:.2f}'
         })
         
-        for col in ['Warranty Change (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (₹)']:
+        for col in ['Warranty Change Jul-Aug (₹)', 'Warranty Change Aug-Sep (₹)', 'Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 'AHSP Change Jul-Aug (₹)', 'AHSP Change Aug-Sep (₹)']:
             styled_df = styled_df.apply(lambda x: [highlight_replacement_change(val, col) for val in x], subset=[col], axis=0)
         
         st.dataframe(styled_df, use_container_width=True)
@@ -1009,9 +1177,9 @@ if replacement_filter:
                                 y='Conversion% (Count)', 
                                 color='Month', 
                                 barmode='group', 
-                                title='Replacement Category Count Conversion: May vs June',
+                                title='Replacement Category Count Conversion: July vs August vs September',
                                 template='plotly_white',
-                                color_discrete_sequence=['#3730a3', '#06b6d4'])
+                                color_discrete_sequence=['#3730a3', '#06b6d4', '#10b981'])
         fig_replacement.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
@@ -1048,43 +1216,55 @@ if speaker_filter:
         speaker_pivot.columns = [f"{col[1]} {col[0]}" for col in speaker_pivot.columns]
         
         # Ensure all required columns exist
-        for col in ['May WarrantyPrice', 'June WarrantyPrice', 'May Conversion% (Count)', 'June Conversion% (Count)', 
-                    'May Conversion% (Price)', 'June Conversion% (Price)', 'May AHSP', 'June AHSP']:
+        for col in ['July WarrantyPrice', 'August WarrantyPrice', 'September WarrantyPrice', 'July Conversion% (Count)', 'August Conversion% (Count)', 'September Conversion% (Count)', 
+                    'July Conversion% (Price)', 'August Conversion% (Price)', 'September Conversion% (Price)', 'July AHSP', 'August AHSP', 'September AHSP']:
             if col not in speaker_pivot.columns:
                 speaker_pivot[col] = 0
         
         # Calculate changes
-        speaker_pivot['Warranty Sales Change (₹)'] = speaker_pivot['June WarrantyPrice'] - speaker_pivot['May WarrantyPrice']
-        speaker_pivot['Count Conversion Change (%)'] = speaker_pivot['June Conversion% (Count)'] - speaker_pivot['May Conversion% (Count)']
-        speaker_pivot['Value Conversion Change (%)'] = speaker_pivot['June Conversion% (Price)'] - speaker_pivot['May Conversion% (Price)']
-        speaker_pivot['AHSP Change (₹)'] = speaker_pivot['June AHSP'] - speaker_pivot['May AHSP']
+        speaker_pivot['Warranty Sales Change Jul-Aug (₹)'] = speaker_pivot['August WarrantyPrice'] - speaker_pivot['July WarrantyPrice']
+        speaker_pivot['Warranty Sales Change Aug-Sep (₹)'] = speaker_pivot['September WarrantyPrice'] - speaker_pivot['August WarrantyPrice']
+        speaker_pivot['Count Conversion Change Jul-Aug (%)'] = speaker_pivot['August Conversion% (Count)'] - speaker_pivot['July Conversion% (Count)']
+        speaker_pivot['Count Conversion Change Aug-Sep (%)'] = speaker_pivot['September Conversion% (Count)'] - speaker_pivot['August Conversion% (Count)']
+        speaker_pivot['Value Conversion Change Jul-Aug (%)'] = speaker_pivot['August Conversion% (Price)'] - speaker_pivot['July Conversion% (Price)']
+        speaker_pivot['Value Conversion Change Aug-Sep (%)'] = speaker_pivot['September Conversion% (Price)'] - speaker_pivot['August Conversion% (Price)']
+        speaker_pivot['AHSP Change Jul-Aug (₹)'] = speaker_pivot['August AHSP'] - speaker_pivot['July AHSP']
+        speaker_pivot['AHSP Change Aug-Sep (₹)'] = speaker_pivot['September AHSP'] - speaker_pivot['August AHSP']
         
         # Prepare display
-        display_cols = ['May WarrantyPrice', 'June WarrantyPrice', 'Warranty Sales Change (₹)',
-                       'May Conversion% (Count)', 'June Conversion% (Count)', 'Count Conversion Change (%)',
-                       'May Conversion% (Price)', 'June Conversion% (Price)', 'Value Conversion Change (%)',
-                       'May AHSP', 'June AHSP', 'AHSP Change (₹)']
+        display_cols = ['July WarrantyPrice', 'August WarrantyPrice', 'September WarrantyPrice', 'Warranty Sales Change Jul-Aug (₹)', 'Warranty Sales Change Aug-Sep (₹)',
+                       'July Conversion% (Count)', 'August Conversion% (Count)', 'September Conversion% (Count)', 'Count Conversion Change Jul-Aug (%)', 'Count Conversion Change Aug-Sep (%)',
+                       'July Conversion% (Price)', 'August Conversion% (Price)', 'September Conversion% (Price)', 'Value Conversion Change Jul-Aug (%)', 'Value Conversion Change Aug-Sep (%)',
+                       'July AHSP', 'August AHSP', 'September AHSP', 'AHSP Change Jul-Aug (₹)', 'AHSP Change Aug-Sep (₹)']
         
         display_df = speaker_pivot[display_cols].reset_index()
-        display_df.columns = ['Speaker Category', 'May Warranty (₹)', 'June Warranty (₹)', 'Warranty Change (₹)',
-                             'May Count Conv (%)', 'June Count Conv (%)', 'Count Conv Change (%)',
-                             'May Value Conv (%)', 'June Value Conv (%)', 'Value Conv Change (%)',
-                             'May AHSP (₹)', 'June AHSP (₹)', 'AHSP Change (₹)']
+        display_df.columns = ['Speaker Category', 'July Warranty (₹)', 'August Warranty (₹)', 'September Warranty (₹)', 'Warranty Change Jul-Aug (₹)', 'Warranty Change Aug-Sep (₹)',
+                             'July Count Conv (%)', 'August Count Conv (%)', 'September Count Conv (%)', 'Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)',
+                             'July Value Conv (%)', 'August Value Conv (%)', 'September Value Conv (%)', 'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)',
+                             'July AHSP (₹)', 'August AHSP (₹)', 'September AHSP (₹)', 'AHSP Change Jul-Aug (₹)', 'AHSP Change Aug-Sep (₹)']
         
         st.dataframe(display_df.style.format({
-            'May Warranty (₹)': '₹{:.0f}',
-            'June Warranty (₹)': '₹{:.0f}',
-            'Warranty Change (₹)': '₹{:.0f}',
-            'May Count Conv (%)': '{:.2f}%',
-            'June Count Conv (%)': '{:.2f}%',
-            'Count Conv Change (%)': '{:.2f}%',
-            'May Value Conv (%)': '{:.2f}%',
-            'June Value Conv (%)': '{:.2f}%',
-            'Value Conv Change (%)': '{:.2f}%',
-            'May AHSP (₹)': '₹{:.2f}',
-            'June AHSP (₹)': '₹{:.2f}',
-            'AHSP Change (₹)': '₹{:.2f}'
-        }).applymap(highlight_change, subset=['Warranty Change (₹)', 'Count Conv Change (%)', 'Value Conv Change (%)', 'AHSP Change (₹)']), 
+            'July Warranty (₹)': '₹{:.0f}',
+            'August Warranty (₹)': '₹{:.0f}',
+            'September Warranty (₹)': '₹{:.0f}',
+            'Warranty Change Jul-Aug (₹)': '₹{:.0f}',
+            'Warranty Change Aug-Sep (₹)': '₹{:.0f}',
+            'July Count Conv (%)': '{:.2f}%',
+            'August Count Conv (%)': '{:.2f}%',
+            'September Count Conv (%)': '{:.2f}%',
+            'Count Conv Change Jul-Aug (%)': '{:.2f}%',
+            'Count Conv Change Aug-Sep (%)': '{:.2f}%',
+            'July Value Conv (%)': '{:.2f}%',
+            'August Value Conv (%)': '{:.2f}%',
+            'September Value Conv (%)': '{:.2f}%',
+            'Value Conv Change Jul-Aug (%)': '{:.2f}%',
+            'Value Conv Change Aug-Sep (%)': '{:.2f}%',
+            'July AHSP (₹)': '₹{:.2f}',
+            'August AHSP (₹)': '₹{:.2f}',
+            'September AHSP (₹)': '₹{:.2f}',
+            'AHSP Change Jul-Aug (₹)': '₹{:.2f}',
+            'AHSP Change Aug-Sep (₹)': '₹{:.2f}'
+        }).applymap(highlight_change, subset=['Warranty Change Jul-Aug (₹)', 'Warranty Change Aug-Sep (₹)', 'Count Conv Change Jul-Aug (%)', 'Count Conv Change Aug-Sep (%)', 'Value Conv Change Jul-Aug (%)', 'Value Conv Change Aug-Sep (%)', 'AHSP Change Jul-Aug (₹)', 'AHSP Change Aug-Sep (₹)']), 
         use_container_width=True)
         
         # Visualization
@@ -1093,9 +1273,9 @@ if speaker_filter:
                              y='Conversion% (Count)', 
                              color='Month', 
                              barmode='group', 
-                             title='Speaker Category Count Conversion: May vs June',
+                             title='Speaker Category Count Conversion: July vs August vs September',
                              template='plotly_white',
-                             color_discrete_sequence=['#3730a3', '#06b6d4'])
+                             color_discrete_sequence=['#3730a3', '#06b6d4', '#10b981'])
         fig_speaker.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
@@ -1107,12 +1287,12 @@ if speaker_filter:
         st.plotly_chart(fig_speaker, use_container_width=True)
 
 # Correlation Analysis
-st.markdown('<h3 class="subheader">🔗 Correlation Analysis (June)</h3>', unsafe_allow_html=True)
-corr_matrix = filtered_df[filtered_df['Month'] == 'June'][['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount', 'AHSP']].corr()
+st.markdown('<h3 class="subheader">🔗 Correlation Analysis (September)</h3>', unsafe_allow_html=True)
+corr_matrix = filtered_df[filtered_df['Month'] == 'September'][['TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount', 'AHSP']].corr()
 fig_corr = px.imshow(
     corr_matrix,
     text_auto=True,
-    title="Correlation Matrix of Key Metrics (June)",
+    title="Correlation Matrix of Key Metrics (September)",
     template='plotly_white',
     color_continuous_scale='Blues',
     zmin=-1,
