@@ -290,7 +290,7 @@ if 'current_df' not in st.session_state:
     st.session_state.current_df = None
 
 # Main dashboard
-st.markdown('<h1 class="main-header">📊 Warranty Conversion Analysis Dashboard - sep</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">📊 Warranty Conversion Analysis Dashboard - OCT</h1>', unsafe_allow_html=True)
 
 # Load data function
 required_columns = ['Item Category', 'BDM', 'RBM', 'Store', 'Staff Name', 'TotalSoldPrice', 'WarrantyPrice', 'TotalCount', 'WarrantyCount']
