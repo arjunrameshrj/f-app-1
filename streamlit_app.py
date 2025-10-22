@@ -513,7 +513,7 @@ if st.session_state.data_loaded and st.session_state.current_df is not None:
         st.stop()
 
     # Main dashboard
-    st.markdown('<h2 class="subheader">📈 June Performance</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 class="subheader">📈 OCT Performance</h2>', unsafe_allow_html=True)
 
     # KPI metrics
     st.markdown('<h3 class="subheader">Warranty Total Count and KPIs</h3>', unsafe_allow_html=True)
