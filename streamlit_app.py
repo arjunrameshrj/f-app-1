@@ -692,20 +692,7 @@ if st.session_state.data_loaded and st.session_state.current_df is not None:
         'Warranty Units': '{:.0f}'
     }), use_container_width=True)
 
-    fig_rbm = px.bar(rbm_summary, 
-                     x='RBM', 
-                     y='Conversion% (Count)', 
-                     title='RBM Count Conversion - June',
-                     template='plotly_white',
-                     color_discrete_sequence=['#3730a3'])
-    fig_rbm.update_layout(
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(family="Poppins, Inter, sans-serif", size=12, color="#1f2937"),
-        xaxis=dict(showgrid=False, tickangle=45),
-        yaxis=dict(showgrid=True, gridcolor='#e5e7eb')
-    )
-    st.plotly_chart(fig_rbm, use_container_width=True)
+    # REMOVED: RBM Count Conversion June visualization
 
     # Category Performance
     st.markdown(f'<h3 class="subheader">📦 {category_column} Performance</h3>', unsafe_allow_html=True)
@@ -724,6 +711,8 @@ if st.session_state.data_loaded and st.session_state.current_df is not None:
     if not category_summary.empty:
         category_display = category_summary[[category_column, 'Conversion% (Count)', 'Conversion% (Price)', 'AHSP', 'WarrantyPrice', 'WarrantyCount']]
         category_display.columns = [category_column, 'Count Conv (%)', 'Value Conv (%)', 'AHSP (₹)', 'Warranty Sales (₹)', 'Warranty Units']
+        
+        # CHANGED: Sort category display in descending order by Count Conv (%)
         category_display = category_display.sort_values('Count Conv (%)', ascending=False)
 
         st.dataframe(category_display.style.format({
@@ -734,6 +723,9 @@ if st.session_state.data_loaded and st.session_state.current_df is not None:
             'Warranty Units': '{:.0f}'
         }), use_container_width=True)
 
+        # CHANGED: Sort category summary in descending order for visualization
+        category_summary = category_summary.sort_values('Conversion% (Count)', ascending=False)
+        
         fig_category = px.bar(category_summary, 
                               x=category_column, 
                               y='Conversion% (Count)', 
