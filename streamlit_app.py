@@ -37,6 +37,9 @@ def load_data():
 
 df = load_data()
 
+# Save full list of statuses BEFORE filtering
+ALL_STATUSES = sorted(df["Lead Status"].dropna().unique())
+
 # ---------------- SIDEBAR FILTERS ----------------
 st.sidebar.header("🔎 Filters")
 
@@ -110,6 +113,9 @@ course_status = pd.pivot_table(
     aggfunc="count",
     fill_value=0
 )
+
+# 🔹 FIX: Ensure all Lead Status columns exist
+course_status = course_status.reindex(columns=ALL_STATUSES, fill_value=0)
 
 course_status["Total"] = course_status.sum(axis=1)
 
