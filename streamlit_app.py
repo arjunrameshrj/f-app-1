@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import plotly.express as px
+from io import BytesIO
 
 # ---------------- CONFIG ----------------
 st.set_page_config(
@@ -15,32 +16,17 @@ API_URL = "https://script.google.com/macros/s/AKfycbzIarFwdhWeSSZ8_bRDFjSW3KKkd_
 # ---------------- LOAD DATA ----------------
 @st.cache_data(ttl=300)
 def load_data():
-    try:
-        r = requests.get(API_URL, timeout=20)
-    except Exception:
-        st.error("Failed to connect to API.")
-        st.stop()
-
+    r = requests.get(API_URL, timeout=20)
     if r.status_code != 200:
         st.error(f"API Error: {r.status_code}")
-        st.text(r.text[:500])
+        st.text(r.text[:300])
         st.stop()
 
-    try:
-        data = r.json()
-    except Exception:
-        st.error("API did not return JSON.")
-        st.text(r.text[:500])
-        st.stop()
-
-    if not isinstance(data, list):
-        st.error("API response is not a list.")
-        st.stop()
-
+    data = r.json()
     df = pd.DataFrame(data)
 
     if df.empty:
-        st.warning("No data found.")
+        st.warning("No data returned from API.")
         st.stop()
 
     if "Date" in df.columns:
@@ -99,10 +85,19 @@ course_count = (
 
 st.dataframe(course_count, use_container_width=True)
 
-# ---- Visualization 1 ----
-st.subheader("📊 Course-wise Leads (Bar Chart)")
-fig1 = px.bar(course_count, x="Course", y="Leads", title="Leads per Course")
-st.plotly_chart(fig1, use_container_width=True)
+buf1 = BytesIO()
+course_count.to_excel(buf1, index=False)
+st.download_button(
+    "⬇ Download Course Leads (Excel)",
+    buf1.getvalue(),
+    "course_leads.xlsx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+st.plotly_chart(
+    px.bar(course_count, x="Course", y="Leads", title="Leads per Course"),
+    use_container_width=True
+)
 
 # ---- Table 2 ----
 st.subheader("📗 Course vs Lead Status")
@@ -116,29 +111,36 @@ course_status = pd.pivot_table(
     fill_value=0
 )
 
-# Add Total column (NEW)
 course_status["Total"] = course_status.sum(axis=1)
 
 st.dataframe(course_status, use_container_width=True)
 
-# ---- Visualization 2 ----
-st.subheader("📊 Course vs Lead Status (Stacked)")
-course_status_chart = course_status.drop(columns=["Total"]).reset_index().melt(
-    id_vars="Course",
-    var_name="Lead Status",
-    value_name="Count"
+buf2 = BytesIO()
+course_status.to_excel(buf2)
+st.download_button(
+    "⬇ Download Course vs Status (Excel)",
+    buf2.getvalue(),
+    "course_status.xlsx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
 
-fig2 = px.bar(
-    course_status_chart,
-    x="Course",
-    y="Count",
-    color="Lead Status",
-    title="Lead Status Distribution per Course",
-    barmode="stack"
+course_status_chart = (
+    course_status.drop(columns=["Total"])
+    .reset_index()
+    .melt(id_vars="Course", var_name="Lead Status", value_name="Count")
 )
 
-st.plotly_chart(fig2, use_container_width=True)
+st.plotly_chart(
+    px.bar(
+        course_status_chart,
+        x="Course",
+        y="Count",
+        color="Lead Status",
+        barmode="stack",
+        title="Lead Status Distribution per Course"
+    ),
+    use_container_width=True
+)
 
 # ---- Table 3 ----
 st.subheader("👤 Contact Owner-wise Leads")
@@ -152,13 +154,21 @@ owner_count = (
 
 st.dataframe(owner_count, use_container_width=True)
 
-# ---- Download ----
-st.subheader("⬇ Download Filtered Data")
-
-csv = filtered.to_csv(index=False).encode("utf-8")
+buf3 = BytesIO()
+owner_count.to_excel(buf3, index=False)
 st.download_button(
-    "Download CSV",
-    csv,
+    "⬇ Download Owner Leads (Excel)",
+    buf3.getvalue(),
+    "owner_leads.xlsx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+# ---- Raw Data Download ----
+st.subheader("⬇ Download Filtered Raw Data")
+
+st.download_button(
+    "Download Filtered CSV",
+    filtered.to_csv(index=False).encode("utf-8"),
     "filtered_leads.csv",
     "text/csv"
 )
