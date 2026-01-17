@@ -11,7 +11,7 @@ st.set_page_config(
     page_icon="📊"
 )
 
-API_URL = "https://script.google.com/macros/s/AKfycbzIarFwdhWeSSZ8_bRDFjSW3KKkd_Dq-utjOsft7Q4waNdCaa06CGd1_IfwHvI6kHcW/exec"
+API_URL = "https://script.google.com/macros/s/AKfycbythN5cd0BQ9Yso4grADT8ubH3mnvMu-pRUjGE_uSGZNfoma6W_ZwV7GqC3Sku9tA0/exec"
 
 # ---------------- LOAD DATA ----------------
 @st.cache_data(ttl=300)
