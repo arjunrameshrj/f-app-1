@@ -338,7 +338,7 @@ LEAD_STATUS_MAP = {
     "not_interested": "Not Interested", 
     "unqualified": "Not Qualified",
     "not_qualified": "Not Qualified",
-    "customer": "Customer",
+    # ❌ REMOVED: "customer": "Customer" - Customer should ONLY come from Lifecycle Stage
     "duplicate": "Duplicate",
     "junk": "Duplicate",
     "": "Unknown",
@@ -860,7 +860,9 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
     
     # Define properties needed for all 4 metrics
     all_properties = [
-        "hs_lead_status", "lead_status", "hubspot_owner_id", "hs_assigned_owner_id",
+        "hs_lead_status", "lead_status", 
+        "lifecyclestage",  # ✅ ADDED: Lifecycle Stage for Customer detection
+        "hubspot_owner_id", "hs_assigned_owner_id",
         "course", "program", "product", "service", "offering",
         "course_name", "program_name", "product_name",
         "enquired_course", "interested_course", "course_interested",
@@ -941,6 +943,10 @@ def normalize_lead_status(raw_status):
     
     status = str(raw_status).strip().lower()
     
+    # ❌ REMOVED: Customer should NOT come from Lead Status
+    # if "customer" in status:
+    #     return "Customer"
+    
     if "prospect" in status:
         if "hot" in status:
             return "Hot"
@@ -963,8 +969,9 @@ def normalize_lead_status(raw_status):
     if "duplicate" in status or "junk" in status:
         return "Duplicate"
     
-    if "customer" in status:
-        return "Customer"
+    # ❌ REMOVED: Customer mapping - Customer should ONLY come from Lifecycle Stage
+    # if "customer" in status:
+    #     return "Customer"
     
     if "new" in status or "open" in status:
         return "New Lead"
@@ -1038,9 +1045,16 @@ def process_contacts_data(contacts, owner_mapping=None):
         else:
             owner_name = owner_id
         
-        # Normalize lead status
+        # ✅ FIXED: CUSTOMER ONLY FROM LIFECYCLE STAGE
         raw_lead_status = properties.get("hs_lead_status", "") or properties.get("lead_status", "")
+        lifecycle_stage = properties.get("lifecyclestage", "")
+        
+        # Normalize lead status (Cold/Warm/Hot/etc.)
         lead_status = normalize_lead_status(raw_lead_status)
+        
+        # 🔥 FINAL RULE: Customer ONLY from Lifecycle Stage
+        if lifecycle_stage and lifecycle_stage.lower() == "customer":
+            lead_status = "Customer"
         
         # Create full name
         full_name = f"{properties.get('firstname', '')} {properties.get('lastname', '')}".strip()
@@ -1058,6 +1072,7 @@ def process_contacts_data(contacts, owner_mapping=None):
             "Lead Status": lead_status,
             "Created Date": properties.get("createdate", ""),
             "Lead Status Raw": raw_lead_status,
+            "Lifecycle Stage": lifecycle_stage,  # ✅ ADDED for debugging
             "Owner ID": owner_id  # Keep for debugging
         })
     
@@ -1077,10 +1092,14 @@ def process_contacts_data(contacts, owner_mapping=None):
     
     # 🔎 QUICK DEBUG CHECK
     if len(processed_data) > 0:
-        debug_df = pd.DataFrame(processed_data[:10])[['Course Owner', 'Owner ID']]
+        debug_df = pd.DataFrame(processed_data[:10])[['Course Owner', 'Owner ID', 'Lead Status', 'Lifecycle Stage']]
         with st.expander("🔍 Debug: First 10 owner mappings", expanded=False):
             st.dataframe(debug_df, use_container_width=True)
             st.caption(f"Total owners found via direct API: {from_direct_api_count}")
+            
+            # Show customer count from Lifecycle Stage
+            customer_count = len([c for c in processed_data if c.get('Lifecycle Stage', '').lower() == 'customer'])
+            st.caption(f"✅ Customers from Lifecycle Stage: {customer_count}")
     
     df = pd.DataFrame(processed_data)
     return df
@@ -1451,6 +1470,7 @@ def main():
         <div class="header-container">
             <h1 style="margin: 0; font-size: 2.5rem;">📊 HubSpot Advanced Analytics Dashboard</h1>
             <p style="margin: 0.5rem 0 0 0; font-size: 1.2rem; opacity: 0.9;">4 Metrics + Comparison View with Professional Excel Export</p>
+            <p style="margin: 0.5rem 0 0 0; font-size: 1rem; opacity: 0.8;">✅ Customer count now correctly from Lifecycle Stage</p>
         </div>
         """,
         unsafe_allow_html=True
@@ -1646,6 +1666,10 @@ def main():
         4. 📈 KPI Dashboard (Clean tables)
         5. 🆚 Comparison View (One visual)
         
+        **✅ Correct Data Logic:**
+        • Cold/Warm/Hot → Lead Status
+        • Customer → Lifecycle Stage ONLY
+        
         **✅ Professional Export:**
         • Raw Data CSV
         • KPI Dashboard CSV  
@@ -1731,7 +1755,7 @@ def main():
             render_kpi_row([
                 render_kpi("Total Leads", f"{kpis['total_leads']:,}", "All contacts", "kpi-box-blue"),
                 render_kpi("Deal Leads", f"{kpis['deal_leads']:,}", f"{kpis['deal_pct']}%", "kpi-box-green"),
-                render_kpi("Customers", f"{kpis['customer']:,}", f"{kpis['customer_pct']}%", "kpi-box-purple"),
+                render_kpi("Customers", f"{kpis['customer']:,}", "Lifecycle Stage", "kpi-box-purple"),
                 render_kpi("Lead→Customer", f"{kpis['lead_to_customer_pct']}%", "Customer / Total", "kpi-box-red"),
             ]),
             unsafe_allow_html=True
@@ -2359,6 +2383,11 @@ def main():
                 # Show formula explanation
                 with st.expander("📊 Formula Explanation"):
                     st.markdown("""
+                    **✅ CORRECTED DATA LOGIC:**
+                    
+                    • **Cold/Warm/Hot** → From Lead Status
+                    • **Customer** → From Lifecycle Stage ONLY
+                    
                     **📈 NEW KPI Formulas:**
                     
                     1. **Deal Leads** = Cold + Warm + Hot + Customer
@@ -2577,7 +2606,7 @@ def main():
         st.markdown(
             f"""
             <div style='text-align: center; color: #666; font-size: 0.8rem; padding: 1rem;'>
-            <strong>HubSpot Advanced Analytics</strong> • Professional Excel Export • Top {TOP_N} Focus • 
+            <strong>HubSpot Advanced Analytics</strong> • Customer from Lifecycle Stage • Professional Excel Export • Top {TOP_N} Focus • 
             Data: {datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")} IST •
             <a href="#top" style="color: #4A6FA5; text-decoration: none;">↑ Back to Top</a>
             </div>
@@ -2623,6 +2652,14 @@ def main():
                         </div>
                     </div>
                     <div style='display: flex; justify-content: center; gap: 2rem; margin-top: 1rem;'>
+                        <div style='text-align: left;'>
+                            <p><strong>✅ CORRECT DATA LOGIC</strong></p>
+                            <ul>
+                                <li>Cold/Warm/Hot → Lead Status</li>
+                                <li>Customer → Lifecycle Stage ONLY</li>
+                                <li>Accurate conversion rates</li>
+                            </ul>
+                        </div>
                         <div style='text-align: left;'>
                             <p><strong>💎 Premium Export</strong></p>
                             <ul>
