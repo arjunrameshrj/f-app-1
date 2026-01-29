@@ -16,7 +16,7 @@ from io import BytesIO
 
 # Set page config
 st.set_page_config(
-    page_title="HubSpot Advanced Analytics",
+    page_title="HubSpot Business Analytics",
     page_icon="📊",
     layout="wide"
 )
@@ -287,6 +287,48 @@ st.markdown("""
         display: flex;
         align-items: center;
         gap: 0.5rem;
+    }
+    
+    /* ✅ NEW: Revenue and Matrix Styles */
+    .revenue-card {
+        background: linear-gradient(135deg, #4CAF50, #8BC34A);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        text-align: center;
+    }
+    
+    .matrix-star {
+        background-color: #d4edda !important;
+        color: #155724 !important;
+        font-weight: bold;
+    }
+    
+    .matrix-potential {
+        background-color: #cce5ff !important;
+        color: #004085 !important;
+        font-weight: bold;
+    }
+    
+    .matrix-burn {
+        background-color: #fff3cd !important;
+        color: #856404 !important;
+        font-weight: bold;
+    }
+    
+    .matrix-weak {
+        background-color: #f8d7da !important;
+        color: #721c24 !important;
+        font-weight: bold;
+    }
+    
+    .revenue-kpi {
+        background: linear-gradient(135deg, #FFD700, #FFA500);
+    }
+    
+    .conversion-kpi {
+        background: linear-gradient(135deg, #20B2AA, #48D1CC);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -858,7 +900,7 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
     status_text = st.empty()
     status_text.text(f"📡 Fetching contacts with {date_field} filter...")
     
-    # Define properties needed for all 4 metrics
+    # Define properties needed for all 4 metrics + REVENUE
     all_properties = [
         "hs_lead_status", "lead_status", 
         "lifecyclestage",  # ✅ MUST HAVE: Lifecycle Stage for Customer detection
@@ -869,7 +911,10 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
         "program_of_interest", "course_of_interest", "product_of_interest",
         "firstname", "lastname", "email", "phone", 
         "createdate", "lastmodifieddate", "hs_object_id",
-        "company", "jobtitle", "country"
+        "company", "jobtitle", "country",
+        # ✅ ADDED: Revenue properties
+        "amount", "deal_amount", "revenue_amount", "total_amount",
+        "deal_value", "value", "price"
     ]
     
     try:
@@ -1063,6 +1108,19 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None):
             if lifecycle_clean == "customer":  # ✅ EXACT MATCH ONLY
                 lead_status = "Customer"
         
+        # ✅ ADDED: Extract revenue/amount from multiple possible fields
+        amount = 0
+        amount_fields = ["amount", "deal_amount", "revenue_amount", "total_amount", "deal_value", "value", "price"]
+        for field in amount_fields:
+            if field in properties and properties[field]:
+                try:
+                    amount_val = str(properties[field]).replace(",", "").strip()
+                    if amount_val:
+                        amount = float(amount_val)
+                        break
+                except:
+                    continue
+        
         # Create full name
         full_name = f"{properties.get('firstname', '')} {properties.get('lastname', '')}".strip()
         
@@ -1077,6 +1135,7 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None):
             "Course/Program": course_info,
             "Course Owner": owner_name,
             "Lead Status": lead_status,
+            "Amount": amount,  # ✅ ADDED: Revenue field
             "Created Date": properties.get("createdate", ""),
             "Lead Status Raw": raw_lead_status,
             "Lifecycle Stage": lifecycle_stage,  # ✅ ADDED for validation
@@ -1108,9 +1167,13 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None):
             st.write(f"✅ Dashboard Customer Count: {customer_count}")
             st.write(f"✅ Lifecycle Stage = 'customer': {lifecycle_customer_count}")
             
+            # Show revenue data
+            total_revenue = df['Amount'].sum()
+            st.write(f"💰 Total Revenue (Amount field): ₹{total_revenue:,.2f}")
+            
             # Show sample data
             if customer_count > 0:
-                customer_samples = df[df['Lead Status'] == 'Customer'][['Full Name', 'Lead Status Raw', 'Lifecycle Stage']].head(5)
+                customer_samples = df[df['Lead Status'] == 'Customer'][['Full Name', 'Lead Status Raw', 'Lifecycle Stage', 'Amount']].head(5)
                 st.write("Sample Customer Records:", customer_samples)
             
             if customer_count == lifecycle_customer_count:
@@ -1279,6 +1342,89 @@ def create_metric_4(df):
     
     return final_df
 
+# ✅ NEW: Course Revenue Analysis
+def create_course_revenue(df):
+    """Calculate revenue by course from customer data."""
+    if df.empty or 'Course/Program' not in df.columns or 'Amount' not in df.columns:
+        return pd.DataFrame()
+    
+    # Filter only customers and courses with revenue
+    customer_df = df[(df['Lead Status'] == 'Customer') & (df['Course/Program'].notna()) & (df['Course/Program'] != '')].copy()
+    
+    if customer_df.empty:
+        return pd.DataFrame()
+    
+    # Clean course names
+    customer_df['Course_Clean'] = customer_df['Course/Program'].str.strip()
+    
+    # Group by course
+    revenue_df = customer_df.groupby('Course_Clean').agg(
+        Customers=('ID', 'count'),
+        Revenue=('Amount', 'sum')
+    ).reset_index().rename(columns={'Course_Clean': 'Course'})
+    
+    # Calculate revenue per customer
+    revenue_df['Revenue per Customer'] = np.where(
+        revenue_df['Customers'] > 0,
+        (revenue_df['Revenue'] / revenue_df['Customers']).round(0),
+        0
+    )
+    
+    # Sort by revenue
+    revenue_df = revenue_df.sort_values('Revenue', ascending=False)
+    
+    return revenue_df
+
+# ✅ NEW: Volume vs Conversion Matrix
+def create_volume_conversion_matrix(metric_1, df):
+    """Create a 2x2 matrix to classify courses based on volume and conversion."""
+    if metric_1.empty or 'Total' not in metric_1.columns:
+        return pd.DataFrame()
+    
+    # Calculate conversion % for each course
+    matrix_data = []
+    
+    for _, row in metric_1.iterrows():
+        course = row['Course']
+        total = row['Total']
+        
+        # Get customer count for this course
+        customer_count = row.get('Customer', 0)
+        
+        # Calculate conversion %
+        conversion_pct = (customer_count / total * 100) if total > 0 else 0
+        
+        matrix_data.append({
+            'Course': course,
+            'Volume': total,
+            'Conversion %': round(conversion_pct, 1),
+            'Customer Count': customer_count
+        })
+    
+    matrix_df = pd.DataFrame(matrix_data)
+    
+    if len(matrix_df) < 2:
+        return matrix_df
+    
+    # Calculate thresholds (median)
+    volume_threshold = matrix_df['Volume'].median()
+    conversion_threshold = matrix_df['Conversion %'].median()
+    
+    # Classify each course
+    def classify_course(row):
+        if row['Volume'] >= volume_threshold and row['Conversion %'] >= conversion_threshold:
+            return "⭐ Star"
+        elif row['Volume'] < volume_threshold and row['Conversion %'] >= conversion_threshold:
+            return "📈 Potential"
+        elif row['Volume'] >= volume_threshold and row['Conversion %'] < conversion_threshold:
+            return "⚠️ Burn (High Volume, Low Conversion)"
+        else:
+            return "❌ Weak"
+    
+    matrix_df['Segment'] = matrix_df.apply(classify_course, axis=1)
+    
+    return matrix_df
+
 def create_comparison_data(df, comparison_type, item1, item2):
     """Create comparison data for different comparison types."""
     if df.empty:
@@ -1407,9 +1553,15 @@ def calculate_kpis(df):
     # Customer % (same as Deal to Customer Conversion)
     customer_pct = round((customer / deal_leads * 100), 1) if deal_leads > 0 else 0
     
+    # ✅ NEW: Revenue Metrics
+    total_revenue = df['Amount'].sum() if 'Amount' in df.columns else 0
+    avg_revenue_per_customer = round((total_revenue / customer), 0) if customer > 0 else 0
+    
     # Top performing metrics
     top_course = ""
     top_owner = ""
+    top_revenue_course = ""
+    top_revenue_amount = 0
     
     if 'Course/Program' in df.columns:
         course_counts = df['Course/Program'].value_counts()
@@ -1423,8 +1575,17 @@ def calculate_kpis(df):
             top_owner = str(owner_counts.index[0])
             top_owner_count = owner_counts.iloc[0]
     
-    # Quality metrics
-    quality_ratio = round((hot + warm) / total_leads * 100, 1) if total_leads > 0 else 0
+    # ✅ NEW: Best Revenue Course
+    if 'Course/Program' in df.columns and 'Amount' in df.columns:
+        customer_df = df[df['Lead Status'] == 'Customer']
+        if not customer_df.empty:
+            revenue_by_course = customer_df.groupby('Course/Program')['Amount'].sum()
+            if not revenue_by_course.empty:
+                top_revenue_course = str(revenue_by_course.index[0])
+                top_revenue_amount = revenue_by_course.iloc[0]
+    
+    # ✅ CHANGED: Conversion metrics instead of Quality metrics
+    conversion_ratio = round((customer / total_leads * 100), 1) if total_leads > 0 else 0
     dropoff_ratio = round((not_interested + not_qualified + not_connected) / total_leads * 100, 1) if total_leads > 0 else 0
     
     return {
@@ -1444,9 +1605,13 @@ def calculate_kpis(df):
         'lead_to_customer_pct': lead_to_customer_pct,
         'lead_to_deal_pct': lead_to_deal_pct,
         'deal_to_customer_pct': deal_to_customer_pct,
+        'total_revenue': total_revenue,
+        'avg_revenue_per_customer': avg_revenue_per_customer,
         'top_course': top_course,
         'top_owner': top_owner,
-        'quality_ratio': quality_ratio,
+        'top_revenue_course': top_revenue_course,
+        'top_revenue_amount': top_revenue_amount,
+        'conversion_ratio': conversion_ratio,
         'dropoff_ratio': dropoff_ratio
     }
 
@@ -1483,9 +1648,9 @@ def main():
     st.markdown(
         """
         <div class="header-container">
-            <h1 style="margin: 0; font-size: 2.5rem;">📊 HubSpot Advanced Analytics Dashboard</h1>
-            <p style="margin: 0.5rem 0 0 0; font-size: 1.2rem; opacity: 0.9;">✅ Customer count 100% accurate (Lifecycle Stage ONLY)</p>
-            <p style="margin: 0.5rem 0 0 0; font-size: 1rem; opacity: 0.8;">✅ Owner mapping fully fixed with API key</p>
+            <h1 style="margin: 0; font-size: 2.5rem;">📊 HubSpot Business Performance Dashboard</h1>
+            <p style="margin: 0.5rem 0 0 0; font-size: 1.2rem; opacity: 0.9;">✅ Product-Level Analytics: Volume vs Conversion vs Revenue</p>
+            <p style="margin: 0.5rem 0 0 0; font-size: 1rem; opacity: 0.8;">⭐ Star | 📈 Potential | ⚠️ Burn | ❌ Weak Courses</p>
         </div>
         """,
         unsafe_allow_html=True
@@ -1502,6 +1667,8 @@ def main():
         st.session_state.date_filter = None
     if 'date_range' not in st.session_state:
         st.session_state.date_range = None
+    if 'revenue_data' not in st.session_state:
+        st.session_state.revenue_data = None
     
     # Create sidebar for configuration
     with st.sidebar:
@@ -1585,6 +1752,9 @@ def main():
                                 'metric_4': create_metric_4(df)
                             }
                             
+                            # ✅ NEW: Calculate revenue data
+                            st.session_state.revenue_data = create_course_revenue(df)
+                            
                             st.success(f"✅ Successfully loaded {len(contacts)} contacts!")
                             st.rerun()
                         else:
@@ -1602,6 +1772,9 @@ def main():
                     'metric_3': create_metric_3(df),
                     'metric_4': create_metric_4(df)
                 }
+                
+                # ✅ NEW: Refresh revenue data
+                st.session_state.revenue_data = create_course_revenue(df)
                 
                 st.success("Analysis refreshed!")
                 st.rerun()
@@ -1672,28 +1845,30 @@ def main():
                         st.error(f"❌ Error generating Excel report: {str(e)}")
         
         st.divider()
-        st.markdown("### 📊 About This Dashboard")
+        st.markdown("### 📊 Dashboard Story")
         st.info("""
-        **✅ 100% ACCURATE DATA:**
+        **🎯 PRODUCT-LEVEL ANALYTICS:**
+        
+        1️⃣ **Volume**: How many leads?
+        2️⃣ **Conversion**: How many become customers?
+        3️⃣ **Revenue**: Which course makes money?
+        
+        **✅ 100% ACCURATE DATA LOGIC:**
         • Cold/Warm/Hot → Lead Status
         • Customer → Lifecycle Stage ONLY
         
-        **✅ BULLETPROOF OWNER MAPPING:**
-        • Pre-fetched owner list
-        • Association fallback
-        • Direct API calls for missing
+        **📈 COURSE CLASSIFICATION:**
+        • ⭐ Star: High volume + High conversion
+        • 📈 Potential: Low volume + High conversion  
+        • ⚠️ Burn: High volume + Low conversion
+        • ❌ Weak: Low volume + Low conversion
         
         **5 Analytical Sections:**
         1. 📊 Course Distribution (Top 10)
         2. 👤 Owner Performance (Top 10) 
-        3. 🎯 Lead Quality (% only)
+        3. 🎯 Conversion Analysis (Lead→Customer %)
         4. 📈 KPI Dashboard (Clean tables)
-        5. 🆚 Comparison View (One visual)
-        
-        **✅ Professional Export:**
-        • Raw Data CSV
-        • KPI Dashboard CSV  
-        • Complete Excel Report (Multiple sheets)
+        5. 🆚 Comparison View
         """)
     
     # Main content area
@@ -1701,6 +1876,7 @@ def main():
     if st.session_state.contacts_df is not None and not st.session_state.contacts_df.empty:
         df = st.session_state.contacts_df
         metrics = st.session_state.metrics
+        revenue_data = st.session_state.revenue_data
         
         # Show owner mapping stats
         if st.session_state.owner_mapping:
@@ -1763,31 +1939,31 @@ def main():
         
         st.divider()
         
-        # ✅ NEW: Executive KPI Dashboard at the TOP
-        st.markdown('<div class="section-header"><h2>🏆 Executive Dashboard Overview</h2></div>', unsafe_allow_html=True)
+        # ✅ NEW: Executive KPI Dashboard at the TOP - WITH REVENUE
+        st.markdown('<div class="section-header"><h2>🏆 Executive Business Dashboard</h2></div>', unsafe_allow_html=True)
         
         # Calculate KPIs
         kpis = calculate_kpis(df)
         
-        # Primary KPI Row - BIG, Fixed Size, Centered
+        # Primary KPI Row - BUSINESS METRICS
         st.markdown(
             render_kpi_row([
                 render_kpi("Total Leads", f"{kpis['total_leads']:,}", "All contacts", "kpi-box-blue"),
                 render_kpi("Deal Leads", f"{kpis['deal_leads']:,}", f"{kpis['deal_pct']}%", "kpi-box-green"),
                 render_kpi("Customers", f"{kpis['customer']:,}", "Lifecycle Stage ONLY", "kpi-box-purple"),
-                render_kpi("Lead→Customer", f"{kpis['lead_to_customer_pct']}%", "Customer / Total", "kpi-box-red"),
+                render_kpi("Total Revenue", f"₹{kpis['total_revenue']:,.0f}", f"₹{kpis['avg_revenue_per_customer']:,} per customer", "revenue-kpi"),
             ]),
             unsafe_allow_html=True
         )
         
-        # Secondary KPI Row with new conversion metrics
+        # Secondary KPI Row - CONVERSION METRICS
         st.markdown(
             render_kpi_row([
-                render_secondary_kpi("Hot Leads", f"{kpis['hot']:,}", "High Priority"),
-                render_secondary_kpi("Warm Leads", f"{kpis['warm']:,}", "Follow-up"),
-                render_secondary_kpi("Cold Leads", f"{kpis['cold']:,}", "Nurture"),
-                render_secondary_kpi("Lead→Deal", f"{kpis['lead_to_deal_pct']}%", "Deal / Total"),
-                render_secondary_kpi("Deal→Customer", f"{kpis['deal_to_customer_pct']}%", "Customer / Deal"),
+                render_secondary_kpi("Lead→Customer", f"{kpis['lead_to_customer_pct']}%", "Conversion %"),
+                render_secondary_kpi("Lead→Deal", f"{kpis['lead_to_deal_pct']}%", "Deal %"),
+                render_secondary_kpi("Deal→Customer", f"{kpis['deal_to_customer_pct']}%", "Customer %"),
+                render_secondary_kpi("Best Revenue", kpis['top_revenue_course'][:15] if kpis['top_revenue_course'] else "N/A", f"₹{kpis['top_revenue_amount']:,.0f}"),
+                render_secondary_kpi("Drop-off", f"{kpis['dropoff_ratio']}%", "Lost leads"),
             ], container_class="secondary-kpi-container"),
             unsafe_allow_html=True
         )
@@ -1874,9 +2050,9 @@ def main():
             st.markdown(
                 render_kpi_row([
                     render_kpi("Filtered Leads", f"{filtered_kpis['total_leads']:,}", f"{filtered_kpis['total_leads']/kpis['total_leads']*100:.1f}% of total", "kpi-box-orange"),
-                    render_kpi("Lead→Deal %", f"{filtered_kpis['lead_to_deal_pct']}%", f"{filtered_kpis['deal_leads']:,} deals", "kpi-box-green"),
-                    render_kpi("Lead→Customer %", f"{filtered_kpis['lead_to_customer_pct']}%", f"{filtered_kpis['customer']:,} customers", "kpi-box-red"),
-                    render_kpi("Deal→Customer %", f"{filtered_kpis['deal_to_customer_pct']}%", "Customer / Deal", "kpi-box-purple"),
+                    render_kpi("Lead→Customer %", f"{filtered_kpis['lead_to_customer_pct']}%", f"{filtered_kpis['customer']:,} customers", "kpi-box-green"),
+                    render_kpi("Lead→Deal %", f"{filtered_kpis['lead_to_deal_pct']}%", f"{filtered_kpis['deal_leads']:,} deals", "kpi-box-purple"),
+                    render_kpi("Total Revenue", f"₹{filtered_kpis['total_revenue']:,.0f}", f"Filtered revenue", "revenue-kpi"),
                 ]),
                 unsafe_allow_html=True
             )
@@ -1896,11 +2072,12 @@ def main():
                 )
         
         # Create tabs for different sections
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "📊 Course Distribution", 
             "👤 Owner Performance", 
-            "🎯 Lead Quality", 
+            "🎯 Conversion Analysis", 
             "📈 KPI Dashboard",
+            "💰 Revenue Analysis",
             "🆚 Comparison View"
         ])
         
@@ -2111,52 +2288,98 @@ def main():
             else:
                 st.info("No owner data available after filtering")
         
-        # SECTION 3: Course-wise Lead Quality View
+        # SECTION 3: Course-wise Conversion Analysis (REPLACES Quality)
         with tab3:
-            st.markdown('<div class="section-header"><h3>🎯 Course-wise Lead Quality Analysis</h3></div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header"><h3>🎯 Course-wise Conversion Analysis</h3></div>', unsafe_allow_html=True)
             
             if not filtered_metrics['metric_1'].empty:
                 metric_1 = filtered_metrics['metric_1'].copy()
                 
-                # ✅ NEW: Top 3 Courses by Quality KPI Cards
-                # Calculate quality score for each course
-                quality_scores = []
+                # ✅ NEW: Top 3 Courses by Conversion % (NOT Quality)
+                conversion_data = []
                 for _, row in metric_1.iterrows():
                     course = row['Course']
                     total = row.get('Total', 0)
                     
                     if total > 0:
-                        # Quality score = (Hot + Warm) / Total
-                        hot = row.get('Hot', 0)
-                        warm = row.get('Warm', 0)
-                        quality_score = round(((hot + warm) / total * 100), 1)
+                        # ✅ CHANGED: Conversion % = Customer / Total (NOT Hot+Warm/Total)
+                        customer = row.get('Customer', 0)
+                        conversion_pct = round((customer / total * 100), 1)
                         
-                        quality_scores.append({
+                        conversion_data.append({
                             'Course': course,
-                            'Quality Score': quality_score,
+                            'Conversion %': conversion_pct,
                             'Total': total,
-                            'Hot': hot,
-                            'Warm': warm
+                            'Customer': customer
                         })
                 
-                if quality_scores:
-                    quality_df = pd.DataFrame(quality_scores)
-                    top_quality_courses = quality_df.nlargest(3, 'Quality Score')
+                if conversion_data:
+                    conversion_df = pd.DataFrame(conversion_data)
+                    top_conversion_courses = conversion_df.nlargest(3, 'Conversion %')
                     
-                    quality_kpis = []
-                    for _, row in top_quality_courses.iterrows():
+                    conversion_kpis = []
+                    for _, row in top_conversion_courses.iterrows():
                         course_name = row['Course'][:12] + "..." if len(row['Course']) > 12 else row['Course']
-                        quality_kpis.append(render_secondary_kpi(
+                        conversion_kpis.append(render_secondary_kpi(
                             course_name,
-                            f"{row['Quality Score']}%",
-                            f"{row['Total']:,} total"
+                            f"{row['Conversion %']}%",
+                            f"{row['Total']:,} leads → {row['Customer']:,} customers"
                         ))
                     
-                    st.markdown("#### 🥇 Top 3 Courses by Quality Score")
+                    st.markdown("#### 🥇 Top 3 Courses by Lead→Customer Conversion %")
                     st.markdown(
-                        render_kpi_row(quality_kpis, container_class="secondary-kpi-container"),
+                        render_kpi_row(conversion_kpis, container_class="secondary-kpi-container"),
                         unsafe_allow_html=True
                     )
+                
+                # ✅ NEW: Volume vs Conversion Matrix
+                st.markdown("#### 📉 Volume vs Conversion Matrix (Strategic View)")
+                
+                matrix_df = create_volume_conversion_matrix(metric_1, filtered_df)
+                
+                if not matrix_df.empty:
+                    # Apply conditional formatting for the matrix
+                    def color_matrix(val):
+                        if val == "⭐ Star":
+                            return 'background-color: #d4edda; color: #155724; font-weight: bold'
+                        elif val == "📈 Potential":
+                            return 'background-color: #cce5ff; color: #004085; font-weight: bold'
+                        elif "⚠️ Burn" in val:
+                            return 'background-color: #fff3cd; color: #856404; font-weight: bold'
+                        elif val == "❌ Weak":
+                            return 'background-color: #f8d7da; color: #721c24; font-weight: bold'
+                        return ''
+                    
+                    # Display with styling
+                    styled_matrix = matrix_df.style.applymap(color_matrix, subset=['Segment'])
+                    
+                    col_mat1, col_mat2 = st.columns([3, 1])
+                    with col_mat1:
+                        st.dataframe(styled_matrix, use_container_width=True, height=350)
+                    
+                    with col_mat2:
+                        st.markdown("#### 📊 Matrix Legend")
+                        st.markdown("""
+                        <div style='background-color: #d4edda; padding: 10px; border-radius: 5px; margin: 5px 0;'>
+                        <strong>⭐ Star</strong><br>
+                        High Volume + High Conversion
+                        </div>
+                        
+                        <div style='background-color: #cce5ff; padding: 10px; border-radius: 5px; margin: 5px 0;'>
+                        <strong>📈 Potential</strong><br>
+                        Low Volume + High Conversion
+                        </div>
+                        
+                        <div style='background-color: #fff3cd; padding: 10px; border-radius: 5px; margin: 5px 0;'>
+                        <strong>⚠️ Burn</strong><br>
+                        High Volume + Low Conversion
+                        </div>
+                        
+                        <div style='background-color: #f8d7da; padding: 10px; border-radius: 5px; margin: 5px 0;'>
+                        <strong>❌ Weak</strong><br>
+                        Low Volume + Low Conversion
+                        </div>
+                        """, unsafe_allow_html=True)
                 
                 # Limit to top courses for charts
                 if 'Total' in metric_1.columns:
@@ -2168,7 +2391,7 @@ def main():
                 chart_data['Course'] = chart_data['Course'].str.slice(0, MAX_LABEL_LENGTH)
                 
                 # Row 1: 100% Stacked Bar Chart - TOP N ONLY
-                st.markdown(f"#### 100% Stacked Bar: Quality Profile (Top {TOP_N} Courses)")
+                st.markdown(f"#### 100% Stacked Bar: Conversion Profile (Top {TOP_N} Courses)")
                 
                 # Calculate percentages
                 perc_data = chart_data.copy()
@@ -2210,7 +2433,7 @@ def main():
                     st.plotly_chart(fig1, use_container_width=True)
                 
                 # Row 2: New Conversion Metrics for Courses
-                st.markdown("#### Conversion Metrics (Top 10 Courses)")
+                st.markdown("#### Conversion Metrics Dashboard (Top 10 Courses)")
                 
                 # Define deal statuses (Cold + Warm + Hot + Customer)
                 deal_statuses = ['Cold', 'Warm', 'Hot', 'Customer']
@@ -2252,7 +2475,7 @@ def main():
                 st.dataframe(kpi_df, use_container_width=True, height=300)
                 
             else:
-                st.info("No course quality data available")
+                st.info("No course conversion data available")
         
         # SECTION 4: Course Owner KPI TABLE
         with tab4:
@@ -2393,17 +2616,144 @@ def main():
                     3. **Lead → Customer %** = (Customer / Grand Total) × 100
                     4. **Deal → Customer %** = (Customer / Deal Leads) × 100
                     
-                    **🎯 Quality Thresholds:**
+                    **🎯 Performance Thresholds:**
                     - **Lead→Deal %**: 🟢 >40% | 🟠 20-40% | 🔴 <20%
                     - **Lead→Customer %**: 🟢 >8% | 🟠 3-8% | 🔴 <3%
                     - **Deal→Customer %**: 🟢 >20% | 🟠 10-20% | 🔴 <10%
+                    
+                    **📊 Volume vs Conversion Matrix:**
+                    - **⭐ Star**: High volume + High conversion
+                    - **📈 Potential**: Low volume + High conversion  
+                    - **⚠️ Burn**: High volume + Low conversion
+                    - **❌ Weak**: Low volume + Low conversion
                     """)
                 
             else:
                 st.info("No KPI data available")
         
-        # SECTION 5: COMPARISON VIEW
+        # ✅ NEW SECTION 5: Revenue Analysis
         with tab5:
+            st.markdown('<div class="section-header"><h3>💰 Revenue Analysis by Course</h3></div>', unsafe_allow_html=True)
+            
+            if revenue_data is not None and not revenue_data.empty:
+                # Top Revenue Course KPI
+                top_revenue = revenue_data.iloc[0]
+                total_revenue = revenue_data['Revenue'].sum()
+                total_customers = revenue_data['Customers'].sum()
+                
+                st.markdown(
+                    render_kpi_row([
+                        render_kpi("Best Revenue Course", top_revenue['Course'][:20], f"₹{top_revenue['Revenue']:,.0f} revenue", "revenue-kpi"),
+                        render_kpi("Total Revenue", f"₹{total_revenue:,.0f}", f"{total_customers} customers", "kpi-box-green"),
+                        render_kpi("Avg Revenue/Customer", f"₹{revenue_data['Revenue per Customer'].mean():,.0f}", "Average", "kpi-box-purple"),
+                        render_kpi("Courses with Revenue", f"{len(revenue_data)}", "Active revenue courses", "kpi-box-blue"),
+                    ]),
+                    unsafe_allow_html=True
+                )
+                
+                # Revenue Distribution Chart
+                st.markdown("#### Revenue Distribution by Course")
+                
+                top_revenue_chart = revenue_data.head(10).copy()
+                top_revenue_chart['Course'] = top_revenue_chart['Course'].str.slice(0, 25)
+                
+                fig1 = px.bar(
+                    top_revenue_chart,
+                    x='Course',
+                    y='Revenue',
+                    title='Top 10 Courses by Revenue',
+                    color='Revenue',
+                    color_continuous_scale='Viridis',
+                    text='Revenue'
+                )
+                fig1.update_traces(
+                    texttemplate='₹%{text:,.0f}',
+                    textposition='outside'
+                )
+                fig1.update_layout(
+                    xaxis_tickangle=-45,
+                    xaxis_title="",
+                    yaxis_title="Revenue (₹)",
+                    height=400,
+                    coloraxis_showscale=False
+                )
+                st.plotly_chart(fig1, use_container_width=True)
+                
+                # Customers vs Revenue Scatter Plot
+                st.markdown("#### Customers vs Revenue Analysis")
+                
+                fig2 = px.scatter(
+                    revenue_data,
+                    x='Customers',
+                    y='Revenue',
+                    size='Revenue per Customer',
+                    color='Revenue',
+                    hover_name='Course',
+                    title='Customers vs Revenue (Bubble Size = Revenue per Customer)',
+                    labels={
+                        'Customers': 'Number of Customers',
+                        'Revenue': 'Total Revenue (₹)',
+                        'Revenue per Customer': 'Avg Revenue/Customer'
+                    },
+                    color_continuous_scale='RdYlGn'
+                )
+                fig2.update_layout(height=400)
+                st.plotly_chart(fig2, use_container_width=True)
+                
+                # Revenue Data Table
+                st.markdown("#### Detailed Revenue Data")
+                
+                # Format revenue columns
+                display_revenue = revenue_data.copy()
+                display_revenue['Revenue'] = display_revenue['Revenue'].apply(lambda x: f"₹{x:,.0f}")
+                display_revenue['Revenue per Customer'] = display_revenue['Revenue per Customer'].apply(lambda x: f"₹{x:,.0f}")
+                
+                st.dataframe(display_revenue, use_container_width=True, height=350)
+                
+                # Download revenue data
+                st.markdown("#### 📥 Export Revenue Data")
+                col_rev1, col_rev2 = st.columns(2)
+                
+                with col_rev1:
+                    csv_rev = revenue_data.to_csv(index=False)
+                    st.download_button(
+                        "📊 Download Revenue Data (CSV)",
+                        csv_rev,
+                        "course_revenue_data.csv",
+                        "text/csv",
+                        use_container_width=True
+                    )
+                
+            else:
+                st.info("No revenue data available. Make sure 'Amount' field is populated in HubSpot for customers.")
+                
+                # Show instructions
+                with st.expander("ℹ️ How to enable revenue tracking"):
+                    st.markdown("""
+                    **To enable revenue tracking in this dashboard:**
+                    
+                    1. **In HubSpot:**
+                       - Ensure deals/contacts have an "Amount" field
+                       - This field should contain the deal value/revenue amount
+                       - Typically named: `amount`, `deal_amount`, `revenue_amount`
+                    
+                    2. **Field mapping in this dashboard:**
+                       - The dashboard checks for these fields: `amount`, `deal_amount`, `revenue_amount`, `total_amount`, `deal_value`, `value`, `price`
+                       - First non-empty value is used
+                    
+                    3. **Data requirements:**
+                       - Only Customers (Lifecycle Stage = 'customer') contribute to revenue
+                       - Amount should be numeric (e.g., 10000 for ₹10,000)
+                    
+                    **Without revenue data, you still get:**
+                    - Lead volume analytics
+                    - Conversion rate tracking
+                    - Course performance matrix
+                    - Owner performance metrics
+                    """)
+        
+        # SECTION 6: COMPARISON VIEW
+        with tab6:
             st.markdown('<div class="section-header"><h3>🆚 Comparison View</h3></div>', unsafe_allow_html=True)
             
             # Comparison controls
@@ -2599,12 +2949,12 @@ def main():
             else:
                 st.info("Select two items to compare")
         
-        # Footer with export summary
+        # Footer with dashboard story
         st.divider()
         st.markdown(
             f"""
             <div style='text-align: center; color: #666; font-size: 0.8rem; padding: 1rem;'>
-            <strong>HubSpot Advanced Analytics</strong> • Customer from Lifecycle Stage ONLY • Bulletproof Owner Mapping • 
+            <strong>HubSpot Business Performance Dashboard</strong> • 📊 Volume | 🎯 Conversion | 💰 Revenue • 
             Data: {datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")} IST •
             <a href="#top" style="color: #4A6FA5; text-decoration: none;">↑ Back to Top</a>
             </div>
@@ -2617,74 +2967,65 @@ def main():
         st.markdown(
             """
             <div style='text-align: center; padding: 3rem;'>
-                <h2>👋 Welcome to HubSpot Advanced Analytics</h2>
+                <h2>👋 Welcome to HubSpot Business Performance Dashboard</h2>
                 <p style='font-size: 1.1rem; color: #666; margin: 1rem 0;'>
-                    Configure date filters and click "Fetch ALL Contacts" to start analysis
+                    Configure date filters and click "Fetch ALL Contacts" to start business analytics
                 </p>
                 <div style='margin-top: 2rem; background-color: #f8f9fa; padding: 2rem; border-radius: 0.5rem;'>
-                    <h4>✅ 100% ACCURATE DATA LOGIC:</h4>
+                    <h4>🎯 PRODUCT-LEVEL ANALYTICS:</h4>
                     <div style='display: flex; justify-content: center; gap: 2rem; margin-top: 1rem;'>
                         <div style='text-align: left;'>
-                            <p><strong>📊 Cold/Warm/Hot</strong></p>
+                            <p><strong>📊 Volume Analytics</strong></p>
                             <ul>
-                                <li>From Lead Status</li>
-                                <li>Sales follow-up stages</li>
-                                <li>Pre-customer status</li>
+                                <li>Which course brings most leads?</li>
+                                <li>Lead status distribution</li>
+                                <li>Owner performance by volume</li>
                             </ul>
                         </div>
                         <div style='text-align: left;'>
-                            <p><strong>👤 Customer</strong></p>
+                            <p><strong>🎯 Conversion Analytics</strong></p>
                             <ul>
-                                <li>From Lifecycle Stage ONLY</li>
-                                <li>Exact match "customer"</li>
-                                <li>Matches HubSpot Excel</li>
+                                <li>Lead → Customer %</li>
+                                <li>Deal → Customer %</li>
+                                <li>Volume vs Conversion Matrix</li>
                             </ul>
                         </div>
                         <div style='text-align: left;'>
-                            <p><strong>👥 Owner Mapping</strong></p>
+                            <p><strong>💰 Revenue Analytics</strong></p>
                             <ul>
-                                <li>Pre-fetched owner list</li>
-                                <li>Association fallback</li>
-                                <li>Direct API for missing</li>
+                                <li>Which course makes money?</li>
+                                <li>Revenue per customer</li>
+                                <li>Best revenue course</li>
                             </ul>
                         </div>
                     </div>
-                    <div style='display: flex; justify-content: center; gap: 2rem; margin-top: 1rem;'>
-                        <div style='text-align: left;'>
-                            <p><strong>📊 Course Distribution</strong></p>
-                            <ul>
-                                <li>Top 10 courses by volume</li>
-                                <li>Clean stacked bar charts</li>
-                                <li>Readable labels</li>
-                            </ul>
-                        </div>
-                        <div style='text-align: left;'>
-                            <p><strong>👤 Owner Performance</strong></p>
-                            <ul>
-                                <li>Top 10 owners by volume</li>
-                                <li>Grouped bar charts</li>
-                                <li>Donut charts for details</li>
-                            </ul>
-                        </div>
-                        <div style='text-align: left;'>
-                            <p><strong>🎯 Lead Quality</strong></p>
-                            <ul>
-                                <li>100% stacked bars</li>
-                                <li>Engaged % & Customer %</li>
-                                <li>Quality ranking tables</li>
-                            </ul>
+                    <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
+                        <h5>📉 Volume vs Conversion Matrix (Strategic View)</h5>
+                        <div style='display: flex; justify-content: center; gap: 1rem; margin-top: 1rem;'>
+                            <div style='background-color: #d4edda; padding: 0.5rem 1rem; border-radius: 0.25rem;'>
+                                <strong>⭐ Star</strong><br>High Volume + High Conversion
+                            </div>
+                            <div style='background-color: #cce5ff; padding: 0.5rem 1rem; border-radius: 0.25rem;'>
+                                <strong>📈 Potential</strong><br>Low Volume + High Conversion
+                            </div>
+                            <div style='background-color: #fff3cd; padding: 0.5rem 1rem; border-radius: 0.25rem;'>
+                                <strong>⚠️ Burn</strong><br>High Volume + Low Conversion
+                            </div>
+                            <div style='background-color: #f8d7da; padding: 0.5rem 1rem; border-radius: 0.25rem;'>
+                                <strong>❌ Weak</strong><br>Low Volume + Low Conversion
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
-                    <p><strong>🚀 Getting Started:</strong></p>
-                    <ol style='text-align: left; margin-left: 30%;'>
-                        <li>Configure date range in sidebar</li>
-                        <li>Click "Fetch ALL Contacts"</li>
-                        <li>Use smart default filters</li>
-                        <li>Explore clean, focused tabs</li>
-                        <li>Download professional reports</li>
-                    </ol>
+                    <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
+                        <p><strong>🚀 Getting Started:</strong></p>
+                        <ol style='text-align: left; margin-left: 30%;'>
+                            <li>Configure date range in sidebar</li>
+                            <li>Click "Fetch ALL Contacts"</li>
+                            <li>Check Executive KPI Dashboard</li>
+                            <li>Explore Volume vs Conversion Matrix</li>
+                            <li>Analyze Revenue by Course</li>
+                        </ol>
+                    </div>
                 </div>
             </div>
             """,
