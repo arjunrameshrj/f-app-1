@@ -980,7 +980,8 @@ def normalize_lead_status(raw_status):
     
     return status.replace("_", " ").title()
 
-def process_contacts_data(contacts, owner_mapping=None):
+# ✅ FIXED: Added api_key parameter to function
+def process_contacts_data(contacts, owner_mapping=None, api_key=None):
     """Process raw contacts data into a clean DataFrame."""
     if not contacts:
         return pd.DataFrame()
@@ -1025,18 +1026,23 @@ def process_contacts_data(contacts, owner_mapping=None):
         
         owner_id = str(owner_id)
         
-        # 🔥 FINAL FIX: Map owner ID to name with direct API fallback
+        # 🔥 FIXED: Map owner ID to name with direct API fallback (WITH API_KEY)
         owner_name = ""
         if owner_mapping:
             if owner_id in owner_mapping:
                 owner_name = owner_mapping[owner_id]
             else:
-                # 🔥 FINAL FALLBACK: fetch owner directly for internal user IDs
-                fetched_name = fetch_single_owner_name(api_key, owner_id)
-                if fetched_name:
-                    owner_name = fetched_name
-                    owner_mapping[owner_id] = fetched_name  # cache it
-                    from_direct_api_count += 1
+                # ✅ FIXED: Now api_key is passed correctly
+                if api_key and owner_id:  # ✅ ADDED: Check api_key is available
+                    fetched_name = fetch_single_owner_name(api_key, owner_id)
+                    if fetched_name:
+                        owner_name = fetched_name
+                        owner_mapping[owner_id] = fetched_name  # cache it
+                        from_direct_api_count += 1
+                    else:
+                        owner_name = f"❌ Unassigned ({owner_id})" if owner_id else "❌ Unassigned"
+                        if owner_id:
+                            unmapped_owners.add(owner_id)
                 else:
                     owner_name = f"❌ Unassigned ({owner_id})" if owner_id else "❌ Unassigned"
                     if owner_id:
@@ -1103,8 +1109,9 @@ def process_contacts_data(contacts, owner_mapping=None):
             st.write(f"✅ Lifecycle Stage = 'customer': {lifecycle_customer_count}")
             
             # Show sample data
-            customer_samples = df[df['Lead Status'] == 'Customer'][['Full Name', 'Lead Status Raw', 'Lifecycle Stage']].head(5)
-            st.write("Sample Customer Records:", customer_samples)
+            if customer_count > 0:
+                customer_samples = df[df['Lead Status'] == 'Customer'][['Full Name', 'Lead Status Raw', 'Lifecycle Stage']].head(5)
+                st.write("Sample Customer Records:", customer_samples)
             
             if customer_count == lifecycle_customer_count:
                 st.success("✅ PERFECT MATCH: Customer count is 100% accurate!")
@@ -1478,6 +1485,7 @@ def main():
         <div class="header-container">
             <h1 style="margin: 0; font-size: 2.5rem;">📊 HubSpot Advanced Analytics Dashboard</h1>
             <p style="margin: 0.5rem 0 0 0; font-size: 1.2rem; opacity: 0.9;">✅ Customer count 100% accurate (Lifecycle Stage ONLY)</p>
+            <p style="margin: 0.5rem 0 0 0; font-size: 1rem; opacity: 0.8;">✅ Owner mapping fully fixed with API key</p>
         </div>
         """,
         unsafe_allow_html=True
@@ -1552,7 +1560,7 @@ def main():
                         st.session_state.date_filter = date_field
                         st.session_state.date_range = (start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
                         
-                        # Fetch owners
+                        # 🔧 FIX: Fetch ALL owners with pagination
                         st.info("📋 Fetching all owners (this may take a moment)...")
                         owner_mapping = fetch_owner_mapping(api_key)
                         st.session_state.owner_mapping = owner_mapping
@@ -1565,8 +1573,8 @@ def main():
                         )
                         
                         if contacts:
-                            # Pass owner_mapping to process_contacts_data
-                            df = process_contacts_data(contacts, owner_mapping)
+                            # ✅ CRITICAL FIX: Pass api_key to process_contacts_data
+                            df = process_contacts_data(contacts, owner_mapping, api_key)  # ✅ ADDED api_key
                             st.session_state.contacts_df = df
                             
                             # Calculate all metrics
@@ -1669,6 +1677,11 @@ def main():
         **✅ 100% ACCURATE DATA:**
         • Cold/Warm/Hot → Lead Status
         • Customer → Lifecycle Stage ONLY
+        
+        **✅ BULLETPROOF OWNER MAPPING:**
+        • Pre-fetched owner list
+        • Association fallback
+        • Direct API calls for missing
         
         **5 Analytical Sections:**
         1. 📊 Course Distribution (Top 10)
@@ -2591,7 +2604,7 @@ def main():
         st.markdown(
             f"""
             <div style='text-align: center; color: #666; font-size: 0.8rem; padding: 1rem;'>
-            <strong>HubSpot Advanced Analytics</strong> • Customer from Lifecycle Stage ONLY • Professional Excel Export • 
+            <strong>HubSpot Advanced Analytics</strong> • Customer from Lifecycle Stage ONLY • Bulletproof Owner Mapping • 
             Data: {datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")} IST •
             <a href="#top" style="color: #4A6FA5; text-decoration: none;">↑ Back to Top</a>
             </div>
@@ -2625,6 +2638,14 @@ def main():
                                 <li>From Lifecycle Stage ONLY</li>
                                 <li>Exact match "customer"</li>
                                 <li>Matches HubSpot Excel</li>
+                            </ul>
+                        </div>
+                        <div style='text-align: left;'>
+                            <p><strong>👥 Owner Mapping</strong></p>
+                            <ul>
+                                <li>Pre-fetched owner list</li>
+                                <li>Association fallback</li>
+                                <li>Direct API for missing</li>
                             </ul>
                         </div>
                     </div>
