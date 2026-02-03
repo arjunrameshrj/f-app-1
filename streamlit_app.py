@@ -609,7 +609,33 @@ def create_excel_report(df_contacts, df_customers, metrics, kpis, date_range, da
                         if pd.notnull(value):
                             worksheet.write(row, col, value, number_format)
         
-        # Sheet 5: Lead Status Summary
+        # Sheet 5: Course Performance (NEW METRIC)
+        if 'metric_5' in metrics and not metrics['metric_5'].empty:
+            metric_5 = metrics['metric_5'].copy()
+            metric_5.to_excel(writer, sheet_name='Course Performance', index=False)
+            
+            worksheet = writer.sheets['Course Performance']
+            for col_num, value in enumerate(metric_5.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # Format percentages
+            percent_columns = ['Deal %', 'Customer %', 'Lead→Customer %', 'Lead→Deal %']
+            num_rows = len(metric_5)
+            num_cols = len(metric_5.columns)
+            
+            for row in range(1, num_rows + 1):
+                for col in range(num_cols):
+                    col_name = metric_5.columns[col]
+                    if col_name in percent_columns:
+                        value = metric_5.iloc[row-1, col]
+                        if pd.notnull(value):
+                            worksheet.write(row, col, value/100, percent_format)
+                    elif col_name not in ['Course'] and col_name != 'Customer_Revenue':
+                        value = metric_5.iloc[row-1, col]
+                        if pd.notnull(value):
+                            worksheet.write(row, col, value, number_format)
+        
+        # Sheet 6: Lead Status Summary
         if not df_contacts.empty:
             status_summary = df_contacts['Lead Status'].value_counts().reset_index()
             status_summary.columns = ['Lead Status', 'Count']
@@ -626,7 +652,7 @@ def create_excel_report(df_contacts, df_customers, metrics, kpis, date_range, da
                 worksheet.write(row, 2, status_summary.iloc[row-1, 2]/100, percent_format)
                 worksheet.write(row, 1, status_summary.iloc[row-1, 1], number_format)
         
-        # Sheet 6: Revenue Analysis
+        # Sheet 7: Revenue Analysis
         if df_customers is not None and not df_customers.empty:
             revenue_summary = df_customers.groupby('Course/Program').agg(
                 Customer_Count=('Is Customer', 'count'),
@@ -1511,6 +1537,107 @@ def create_metric_4(df_contacts, df_customers):
     
     return final_df
 
+# ✅ NEW: METRIC 5 - Course Performance KPI Table (Same as Owner Performance but for Courses)
+def create_metric_5(df_contacts, df_customers):
+    """METRIC 5: Course Performance KPI Table"""
+    if df_contacts.empty or 'Course/Program' not in df_contacts.columns:
+        return pd.DataFrame()
+    
+    course_lead_pivot = create_metric_1(df_contacts)
+    
+    if course_lead_pivot.empty:
+        return pd.DataFrame()
+    
+    # Get customer data from deals by course
+    if df_customers is not None and not df_customers.empty and 'Course/Program' in df_customers.columns:
+        customer_by_course = df_customers.groupby('Course/Program').agg(
+            Customer_Count=('Is Customer', 'sum'),
+            Customer_Revenue=('Amount', 'sum')
+        ).reset_index()
+    else:
+        customer_by_course = pd.DataFrame(columns=['Course/Program', 'Customer_Count', 'Customer_Revenue'])
+    
+    # Merge lead data with customer data
+    result_df = course_lead_pivot.copy()
+    result_df = result_df.rename(columns={'Course': 'Course'})
+    result_df['Customer'] = 0
+    
+    if not customer_by_course.empty:
+        result_df = pd.merge(result_df, customer_by_course, left_on='Course', right_on='Course/Program', how='left')
+        result_df['Customer_Count'] = result_df['Customer_Count'].fillna(0)
+        result_df['Customer_Revenue'] = result_df['Customer_Revenue'].fillna(0)
+        result_df['Customer'] = result_df['Customer_Count']
+        # Drop the extra course column from merge
+        result_df = result_df.drop(columns=['Course/Program'], errors='ignore')
+    else:
+        result_df['Customer_Count'] = 0
+        result_df['Customer_Revenue'] = 0
+    
+    # Deal Leads = Hot + Warm + Cold + Customer
+    deal_statuses = ['Cold', 'Warm', 'Hot']
+    result_df['Deal Leads'] = 0
+    
+    for status in deal_statuses:
+        if status in result_df.columns:
+            result_df['Deal Leads'] += result_df[status].fillna(0)
+    
+    result_df['Deal Leads'] += result_df['Customer']
+    
+    # Calculate percentages
+    if 'Total' in result_df.columns:
+        result_df = result_df.rename(columns={'Total': 'Grand Total'})
+        result_df['Deal %'] = np.where(
+            result_df['Grand Total'] > 0,
+            (result_df['Deal Leads'] / result_df['Grand Total'] * 100).round(2),
+            0
+        )
+    else:
+        result_df['Deal %'] = 0
+    
+    result_df['Customer %'] = np.where(
+        result_df['Deal Leads'] > 0,
+        (result_df['Customer'] / result_df['Deal Leads'] * 100).round(2),
+        0
+    )
+    
+    if 'Grand Total' in result_df.columns:
+        result_df['Lead→Customer %'] = np.where(
+            result_df['Grand Total'] > 0,
+            (result_df['Customer'] / result_df['Grand Total'] * 100).round(2),
+            0
+        )
+        result_df['Lead→Deal %'] = np.where(
+            result_df['Grand Total'] > 0,
+            (result_df['Deal Leads'] / result_df['Grand Total'] * 100).round(2),
+            0
+        )
+    else:
+        result_df['Lead→Customer %'] = 0
+        result_df['Lead→Deal %'] = 0
+    
+    # Select columns
+    base_cols = ['Course']
+    status_cols = ['Cold', 'Hot', 'Warm']
+    existing_status_cols = [col for col in status_cols if col in result_df.columns]
+    
+    final_cols = base_cols + existing_status_cols + [
+        'Customer', 
+        'Customer_Revenue',
+        'Deal Leads', 
+        'Deal %', 
+        'Customer %',
+        'Lead→Customer %',
+        'Lead→Deal %',
+        'Grand Total'
+    ]
+    
+    final_df = result_df[final_cols].copy()
+    
+    if 'Grand Total' in final_df.columns:
+        final_df = final_df.sort_values('Grand Total', ascending=False)
+    
+    return final_df
+
 # ✅ NEW: Course Revenue Analysis
 def create_course_revenue(df_customers):
     """Calculate revenue by course from customer data."""
@@ -1977,11 +2104,12 @@ def main():
                             df_customers = process_deals_as_customers(deals, owner_mapping, api_key, st.session_state.deal_stages)
                             st.session_state.customers_df = df_customers
                             
-                            # Calculate metrics
+                            # Calculate metrics - ADD NEW METRIC 5
                             st.session_state.metrics = {
                                 'metric_1': create_metric_1(df_contacts),
                                 'metric_2': create_metric_2(df_contacts),
-                                'metric_4': create_metric_4(df_contacts, df_customers)
+                                'metric_4': create_metric_4(df_contacts, df_customers),
+                                'metric_5': create_metric_5(df_contacts, df_customers)  # ✅ NEW METRIC
                             }
                             
                             # ✅ NEW: Calculate revenue data
@@ -2012,7 +2140,8 @@ def main():
                 st.session_state.metrics = {
                     'metric_1': create_metric_1(df_contacts),
                     'metric_2': create_metric_2(df_contacts),
-                    'metric_4': create_metric_4(df_contacts, df_customers)
+                    'metric_4': create_metric_4(df_contacts, df_customers),
+                    'metric_5': create_metric_5(df_contacts, df_customers)  # ✅ NEW METRIC
                 }
                 
                 # ✅ NEW: Refresh revenue data
@@ -2175,16 +2304,16 @@ def main():
             )
         
         with col2:
-            # Download KPI Dashboard
-            if 'metric_4' in metrics and not metrics['metric_4'].empty:
-                csv_kpi = metrics['metric_4'].to_csv(index=False).encode('utf-8')
+            # Download Course KPI Dashboard (NEW)
+            if 'metric_5' in metrics and not metrics['metric_5'].empty:
+                csv_course_kpi = metrics['metric_5'].to_csv(index=False).encode('utf-8')
                 st.download_button(
-                    label="📊 Download KPI Dashboard (CSV)",
-                    data=csv_kpi,
-                    file_name=f"hubspot_kpi_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    label="📚 Download Course KPI Dashboard (CSV)",
+                    data=csv_course_kpi,
+                    file_name=f"hubspot_course_kpi_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     use_container_width=True,
-                    help="Owner performance metrics with conversion rates"
+                    help="Course performance metrics with conversion rates"
                 )
         
         with col3:
@@ -2268,7 +2397,8 @@ def main():
         filtered_metrics = {
             'metric_1': create_metric_1(filtered_df),
             'metric_2': create_metric_2(filtered_df),
-            'metric_4': create_metric_4(filtered_df, df_customers)
+            'metric_4': create_metric_4(filtered_df, df_customers),
+            'metric_5': create_metric_5(filtered_df, df_customers)  # ✅ NEW METRIC
         }
         
         # Show filter info
@@ -2350,11 +2480,12 @@ def main():
         
         st.divider()
         
-        # ✅ ENHANCED: Create tabs with NEW Revenue Analysis tab
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        # ✅ ENHANCED: Create tabs with NEW Course Performance tab
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
             "📊 Lead Analysis", 
             "💰 Customer Analysis", 
-            "📈 KPI Dashboard",
+            "📈 Owner KPI Dashboard",
+            "📚 Course KPI Dashboard",  # ✅ NEW TAB
             "📉 Volume vs Conversion",
             "💸 Revenue Analysis",
             "🆚 Comparison View"
@@ -2457,9 +2588,9 @@ def main():
             else:
                 st.info("No customer data available")
         
-        # SECTION 3: KPI Dashboard
+        # SECTION 3: Owner KPI Dashboard
         with tab3:
-            st.markdown('<div class="section-header"><h3>📈 KPI Dashboard (Leads + Customers)</h3></div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header"><h3>📈 Owner Performance KPI Dashboard</h3></div>', unsafe_allow_html=True)
             
             metric_4 = filtered_metrics['metric_4']
             
@@ -2480,8 +2611,55 @@ def main():
                 display_df = metric_4.style.applymap(highlight_lead_to_customer, subset=['Lead→Customer %'])
                 st.dataframe(display_df, use_container_width=True, height=400)
         
-        # ✅ NEW SECTION 4: Volume vs Conversion Matrix
+        # ✅ NEW SECTION 4: Course Performance KPI Dashboard
         with tab4:
+            st.markdown('<div class="section-header"><h3>📚 Course Performance KPI Dashboard</h3></div>', unsafe_allow_html=True)
+            
+            metric_5 = filtered_metrics['metric_5']
+            
+            if not metric_5.empty:
+                # KPI Table with conditional formatting
+                st.markdown("#### Course Performance KPI Table")
+                
+                def highlight_course_performance(val):
+                    if isinstance(val, (int, float)):
+                        if val < 3:
+                            return 'background-color: #f8d7da; color: #721c24; font-weight: bold'
+                        elif val < 8:
+                            return 'background-color: #fff3cd; color: #856404; font-weight: bold'
+                        else:
+                            return 'background-color: #d4edda; color: #155724; font-weight: bold'
+                    return ''
+                
+                # Apply conditional formatting
+                styled_df = metric_5.style.applymap(
+                    highlight_course_performance, 
+                    subset=['Lead→Customer %']
+                ).applymap(
+                    highlight_course_performance, 
+                    subset=['Customer %']
+                )
+                
+                st.dataframe(styled_df, use_container_width=True, height=400)
+                
+                # Download Course KPI Data
+                st.markdown("### 📥 Export Course KPI Data")
+                col_course1, col_course2 = st.columns(2)
+                
+                with col_course1:
+                    csv_course = metric_5.to_csv(index=False)
+                    st.download_button(
+                        "📊 Download Course KPI Data (CSV)",
+                        csv_course,
+                        "course_performance_kpi.csv",
+                        "text/csv",
+                        use_container_width=True
+                    )
+            else:
+                st.info("No course performance data available")
+        
+        # SECTION 5: Volume vs Conversion Matrix
+        with tab5:
             st.markdown('<div class="section-header"><h3>📉 Volume vs Conversion Matrix</h3></div>', unsafe_allow_html=True)
             
             if matrix_data is not None and not matrix_data.empty:
@@ -2573,8 +2751,8 @@ def main():
             else:
                 st.info("No matrix data available")
         
-        # ✅ NEW SECTION 5: Revenue Analysis
-        with tab5:
+        # SECTION 6: Revenue Analysis
+        with tab6:
             st.markdown('<div class="section-header"><h3>💸 Revenue Analysis by Course</h3></div>', unsafe_allow_html=True)
             
             if revenue_data is not None and not revenue_data.empty:
@@ -2649,8 +2827,8 @@ def main():
             else:
                 st.info("No revenue data available. Make sure deals have 'Amount' field populated in HubSpot.")
         
-        # SECTION 6: COMPARISON VIEW
-        with tab6:
+        # SECTION 7: COMPARISON VIEW
+        with tab7:
             st.markdown('<div class="section-header"><h3>🆚 Comparison View</h3></div>', unsafe_allow_html=True)
             
             # Comparison controls
@@ -2864,6 +3042,18 @@ def main():
                             <li>Check Data Validation at top of dashboard</li>
                             <li>All "Customer" entries in leads will be auto-fixed</li>
                         </ol>
+                    </div>
+                    
+                    <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
+                        <h5>📚 NEW: Course Performance KPI Dashboard</h5>
+                        <p>Now includes comprehensive course-wise performance metrics:</p>
+                        <ul style='text-align: left; margin-left: 25%;'>
+                            <li>✅ Cold/Warm/Hot lead counts by course</li>
+                            <li>✅ Customer conversion % by course</li>
+                            <li>✅ Lead→Deal % by course</li>
+                            <li>✅ Revenue by course</li>
+                            <li>✅ Export as CSV/Excel</li>
+                        </ul>
                     </div>
                     
                     <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
