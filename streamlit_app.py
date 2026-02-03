@@ -366,53 +366,6 @@ st.markdown("""
         align-items: center;
         gap: 0.5rem;
     }
-    
-    /* ✅ NEW: Owner Visualization Styles */
-    .owner-scorecard {
-        background: linear-gradient(135deg, #667eea, #764ba2);
-        color: white;
-        padding: 1.5rem;
-        border-radius: 12px;
-        margin: 1rem 0;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        text-align: center;
-    }
-    
-    .owner-scorecard-green {
-        background: linear-gradient(135deg, #2E8B57, #3CB371);
-    }
-    
-    .owner-scorecard-blue {
-        background: linear-gradient(135deg, #4A6FA5, #166088);
-    }
-    
-    .owner-scorecard-orange {
-        background: linear-gradient(135deg, #FF7A59, #FFA500);
-    }
-    
-    .owner-scorecard-purple {
-        background: linear-gradient(135deg, #8A2BE2, #9370DB);
-    }
-    
-    .owner-ranking-gold {
-        background: linear-gradient(135deg, #FFD700, #FFA500);
-    }
-    
-    .owner-ranking-silver {
-        background: linear-gradient(135deg, #C0C0C0, #A9A9A9);
-    }
-    
-    .owner-ranking-bronze {
-        background: linear-gradient(135deg, #CD7F32, #A0522D);
-    }
-    
-    .owner-visual-section {
-        background: linear-gradient(135deg, #f8f9fa, #e9ecef);
-        padding: 1.5rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        border: 1px solid #dee2e6;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -722,273 +675,6 @@ def create_excel_report(df_contacts, df_customers, metrics, kpis, date_range, da
     # Get the Excel data
     excel_data = output.getvalue()
     return excel_data
-
-# ✅ NEW: Attractive Owner Visualization Functions
-def create_owner_performance_heatmap(metric_4):
-    """Create heatmap visualization for owner performance."""
-    if metric_4.empty:
-        return None
-    
-    # Select top owners by total leads
-    top_owners = metric_4.nlargest(15, 'Grand Total') if 'Grand Total' in metric_4.columns else metric_4.head(15)
-    
-    # Prepare data for heatmap - use key metrics
-    heatmap_data = top_owners[['Course Owner', 'Lead→Customer %', 'Lead→Deal %', 'Customer %']].copy()
-    heatmap_data = heatmap_data.set_index('Course Owner')
-    
-    # Truncate owner names for better display
-    heatmap_data.index = [name[:20] + '...' if len(name) > 20 else name for name in heatmap_data.index]
-    
-    return heatmap_data
-
-def create_owner_radar_chart(metric_4, selected_owners=None):
-    """Create radar chart comparing multiple owners."""
-    if metric_4.empty or len(metric_4) < 2:
-        return None, None
-    
-    # Select owners to compare
-    if selected_owners and len(selected_owners) > 0:
-        compare_owners = metric_4[metric_4['Course Owner'].isin(selected_owners)].copy()
-    else:
-        # Default: top 3 owners by Grand Total
-        compare_owners = metric_4.nlargest(4, 'Grand Total').copy() if 'Grand Total' in metric_4.columns else metric_4.head(4).copy()
-    
-    if len(compare_owners) < 2:
-        return None, None
-    
-    # Prepare data for radar chart
-    radar_metrics = ['Lead→Customer %', 'Lead→Deal %', 'Customer %']
-    
-    # Check if we have funnel metrics
-    funnel_metrics = []
-    for metric in ['Cold', 'Warm', 'Hot']:
-        if metric in compare_owners.columns:
-            funnel_metrics.append(metric)
-    
-    # Use funnel metrics if available
-    if len(funnel_metrics) >= 2:
-        radar_metrics = funnel_metrics[:3]  # Use up to 3 funnel metrics
-    
-    # Prepare data
-    categories = radar_metrics
-    fig = go.Figure()
-    
-    colors = px.colors.qualitative.Set3
-    
-    for idx, (_, owner_row) in enumerate(compare_owners.iterrows()):
-        owner_name = owner_row['Course Owner'][:15] + '...' if len(owner_row['Course Owner']) > 15 else owner_row['Course Owner']
-        
-        values = []
-        for category in categories:
-            if category in ['Lead→Customer %', 'Lead→Deal %', 'Customer %']:
-                values.append(owner_row.get(category, 0))
-            else:
-                # For funnel metrics, calculate percentage of Grand Total
-                if 'Grand Total' in owner_row and owner_row['Grand Total'] > 0:
-                    values.append((owner_row.get(category, 0) / owner_row['Grand Total']) * 100)
-                else:
-                    values.append(0)
-        
-        # Add to radar chart
-        fig.add_trace(go.Scatterpolar(
-            r=values,
-            theta=categories,
-            fill='toself',
-            name=owner_name,
-            line_color=colors[idx % len(colors)],
-            opacity=0.7
-        ))
-    
-    fig.update_layout(
-        polar=dict(
-            radialaxis=dict(
-                visible=True,
-                range=[0, 100],
-                tickfont=dict(size=10)
-            ),
-        ),
-        showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=1.1
-        ),
-        height=500,
-        margin=dict(l=80, r=80, t=40, b=40)
-    )
-    
-    return fig, compare_owners['Course Owner'].tolist()
-
-def create_owner_scorecards(metric_4, top_n=6):
-    """Create visual scorecards for top owners."""
-    if metric_4.empty:
-        return []
-    
-    # Get top owners by conversion rate
-    top_owners = metric_4.nlargest(top_n, 'Lead→Customer %').copy() if 'Lead→Customer %' in metric_4.columns else metric_4.head(top_n).copy()
-    
-    scorecards = []
-    color_classes = ['owner-scorecard-green', 'owner-scorecard-blue', 'owner-scorecard-orange', 
-                     'owner-scorecard-purple', 'owner-scorecard', 'owner-scorecard-green']
-    
-    for idx, (_, owner_row) in enumerate(top_owners.iterrows()):
-        owner_name = owner_row['Course Owner']
-        conversion_rate = owner_row.get('Lead→Customer %', 0)
-        deal_rate = owner_row.get('Lead→Deal %', 0)
-        total_leads = owner_row.get('Grand Total', 0)
-        customers = owner_row.get('Customer', 0)
-        
-        color_class = color_classes[idx % len(color_classes)]
-        
-        # Determine performance badge
-        if conversion_rate >= 10:
-            performance_badge = "🏆 TOP PERFORMER"
-        elif conversion_rate >= 5:
-            performance_badge = "⭐ GOOD"
-        elif conversion_rate > 0:
-            performance_badge = "📈 AVERAGE"
-        else:
-            performance_badge = "📊 NEEDS IMPROVEMENT"
-        
-        scorecard_html = f"""
-        <div class="owner-scorecard {color_class}">
-            <h4 style="margin: 0 0 10px 0; font-size: 1.2rem;">{owner_name[:25]}{'...' if len(owner_name) > 25 else ''}</h4>
-            <div style="display: flex; justify-content: space-between; margin: 10px 0;">
-                <div style="text-align: center;">
-                    <div style="font-size: 2rem; font-weight: bold;">{conversion_rate}%</div>
-                    <div style="font-size: 0.8rem;">Lead→Customer</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 2rem; font-weight: bold;">{deal_rate}%</div>
-                    <div style="font-size: 0.8rem;">Lead→Deal</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 2rem; font-weight: bold;">{customers}</div>
-                    <div style="font-size: 0.8rem;">Customers</div>
-                </div>
-            </div>
-            <div style="margin-top: 10px; font-size: 0.9rem; background: rgba(255,255,255,0.2); padding: 5px; border-radius: 5px;">
-                {performance_badge} | {total_leads:,} total leads
-            </div>
-        </div>
-        """
-        
-        scorecards.append(scorecard_html)
-    
-    return scorecards
-
-def create_owner_funnel_chart(metric_4, selected_owners=None):
-    """Create funnel visualization for selected owners."""
-    if metric_4.empty:
-        return None
-    
-    if selected_owners and len(selected_owners) > 0:
-        compare_data = metric_4[metric_4['Course Owner'].isin(selected_owners)].copy()
-    else:
-        compare_data = metric_4.nlargest(3, 'Grand Total').copy() if 'Grand Total' in metric_4.columns else metric_4.head(3).copy()
-    
-    if compare_data.empty:
-        return None
-    
-    # Prepare funnel data
-    funnel_stages = ['Cold', 'Warm', 'Hot', 'Customer']
-    available_stages = [stage for stage in funnel_stages if stage in compare_data.columns]
-    
-    if not available_stages:
-        return None
-    
-    # Create funnel chart
-    fig = go.Figure()
-    
-    for _, owner_row in compare_data.iterrows():
-        owner_name = owner_row['Course Owner'][:15] + '...' if len(owner_row['Course Owner']) > 15 else owner_row['Course Owner']
-        
-        values = []
-        for stage in available_stages:
-            values.append(owner_row.get(stage, 0))
-        
-        fig.add_trace(go.Funnel(
-            name=owner_name,
-            y=available_stages,
-            x=values,
-            textinfo="value+percent initial",
-            opacity=0.8
-        ))
-    
-    fig.update_layout(
-        title="Owner Funnel Comparison",
-        funnelmode="stack",
-        height=500,
-        showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=1.05
-        )
-    )
-    
-    return fig
-
-def create_owner_performance_grid(metric_4):
-    """Create a grid view of owner performance."""
-    if metric_4.empty:
-        return None
-    
-    # Sort by Lead→Customer %
-    performance_grid = metric_4.copy()
-    if 'Lead→Customer %' in performance_grid.columns:
-        performance_grid = performance_grid.sort_values('Lead→Customer %', ascending=False)
-    
-    # Select top 12 owners
-    performance_grid = performance_grid.head(12)
-    
-    # Create grid HTML
-    grid_html = """
-    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; margin: 20px 0;">
-    """
-    
-    for idx, (_, owner_row) in enumerate(performance_grid.iterrows()):
-        owner_name = owner_row['Course Owner']
-        conversion_rate = owner_row.get('Lead→Customer %', 0)
-        total_leads = owner_row.get('Grand Total', 0)
-        customers = owner_row.get('Customer', 0)
-        
-        # Determine color based on conversion rate
-        if conversion_rate >= 10:
-            bg_color = "linear-gradient(135deg, #d4edda, #c3e6cb)"
-            border_color = "#28a745"
-        elif conversion_rate >= 5:
-            bg_color = "linear-gradient(135deg, #fff3cd, #ffeaa7)"
-            border_color = "#ffc107"
-        else:
-            bg_color = "linear-gradient(135deg, #f8d7da, #f5c6cb)"
-            border_color = "#dc3545"
-        
-        # Rank indicator
-        rank = idx + 1
-        rank_emoji = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
-        
-        grid_html += f"""
-        <div style="background: {bg_color}; border: 2px solid {border_color}; border-radius: 10px; padding: 15px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                <div style="font-size: 1.5rem; font-weight: bold;">{rank_emoji}</div>
-                <div style="font-size: 1.8rem; font-weight: bold; color: #2c3e50;">{conversion_rate}%</div>
-            </div>
-            <div style="font-weight: bold; font-size: 1.1rem; margin-bottom: 5px;">{owner_name[:20]}{'...' if len(owner_name) > 20 else ''}</div>
-            <div style="display: flex; justify-content: space-between; font-size: 0.9rem; color: #666;">
-                <div>📊 {total_leads:,} leads</div>
-                <div>💰 {customers} customers</div>
-            </div>
-            <div style="margin-top: 10px; height: 8px; background: #e9ecef; border-radius: 4px; overflow: hidden;">
-                <div style="width: {min(conversion_rate, 100)}%; height: 100%; background: {border_color};"></div>
-            </div>
-        </div>
-        """
-    
-    grid_html += "</div>"
-    return grid_html
 
 # ✅ CRITICAL FIX: Fetch Deal Pipeline Stages to get correct Stage IDs
 @st.cache_data(ttl=86400)
@@ -2800,7 +2486,7 @@ def main():
             "💰 Customer Analysis", 
             "📈 Owner KPI Dashboard",
             "📚 Course KPI Dashboard",  # ✅ NEW TAB
-            "👑 Owner Visual Analytics",  # ✅ NEW VISUAL TAB
+            "👑 Owner Visual Analytics",  # ✅ NEW VISUAL TAB (UPDATED)
             "📉 Volume vs Conversion",
             "💸 Revenue Analysis",
             "🆚 Comparison View"
@@ -2973,138 +2659,292 @@ def main():
             else:
                 st.info("No course performance data available")
         
-        # ✅ NEW SECTION 5: Owner Visual Analytics
+        # ✅ UPDATED SECTION 5: Owner Visual Analytics - DECISION-READY VISUALS
         with tab5:
-            st.markdown('<div class="section-header"><h3>👑 Course Owner Visual Analytics</h3></div>', unsafe_allow_html=True)
-            
+            st.markdown(
+                '<div class="section-header"><h3>👑 Course Owner Visual Analytics</h3></div>',
+                unsafe_allow_html=True
+            )
+
             metric_4 = filtered_metrics['metric_4']
-            
-            if not metric_4.empty:
-                # Owner Selection for Comparison
-                st.markdown("### 🎯 Select Owners for Comparison")
-                
-                owner_names = metric_4['Course Owner'].unique().tolist()
-                owner_names = [str(name) for name in owner_names if str(name) != '']
-                
-                selected_owners_visual = st.multiselect(
-                    "Choose owners to compare:",
-                    options=owner_names[:20] if len(owner_names) > 20 else owner_names,
-                    default=owner_names[:3] if len(owner_names) >= 3 else owner_names,
-                    help="Select up to 4 owners for visual comparison"
-                )
-                
-                # Limit to 4 owners for better visualization
-                if len(selected_owners_visual) > 4:
-                    st.warning("⚠️ Showing only first 4 owners for better visualization")
-                    selected_owners_visual = selected_owners_visual[:4]
-                
-                if selected_owners_visual:
-                    # 1. Owner Scorecards
-                    st.markdown("### 🏆 Owner Performance Scorecards")
-                    
-                    scorecards = create_owner_scorecards(metric_4[metric_4['Course Owner'].isin(selected_owners_visual)], top_n=6)
-                    
-                    if scorecards:
-                        # Display scorecards in a grid
-                        cols = st.columns(3)
-                        for idx, scorecard in enumerate(scorecards):
-                            with cols[idx % 3]:
-                                st.markdown(scorecard, unsafe_allow_html=True)
-                    
-                    # 2. Owner Comparison Radar Chart
-                    st.markdown("### 📊 Owner Performance Comparison")
-                    
-                    radar_fig, radar_owners = create_owner_radar_chart(metric_4, selected_owners_visual)
-                    
-                    if radar_fig:
-                        st.plotly_chart(radar_fig, use_container_width=True)
-                        
-                        st.markdown("""
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                        <strong>📈 How to read this chart:</strong><br>
-                        • Each colored area represents one owner's performance<br>
-                        • The wider the area, the better the performance<br>
-                        • Compare shapes to see strengths & weaknesses
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    # 3. Owner Funnel Comparison
-                    st.markdown("### 📉 Owner Funnel Comparison")
-                    
-                    funnel_fig = create_owner_funnel_chart(metric_4, selected_owners_visual)
-                    
-                    if funnel_fig:
-                        st.plotly_chart(funnel_fig, use_container_width=True)
-                        
-                        st.markdown("""
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                        <strong>📊 How to read this chart:</strong><br>
-                        • Shows how leads move through each owner's pipeline<br>
-                        • Wider bars = more leads at that stage<br>
-                        • Compare conversion rates between owners
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    # 4. Owner Performance Grid
-                    st.markdown("### 🥇 Owner Leaderboard")
-                    
-                    performance_grid = create_owner_performance_grid(metric_4[metric_4['Course Owner'].isin(selected_owners_visual)])
-                    
-                    if performance_grid:
-                        st.markdown(performance_grid, unsafe_allow_html=True)
-                    
-                    # 5. Performance Heatmap
-                    st.markdown("### 🔥 Performance Heatmap")
-                    
-                    heatmap_data = create_owner_performance_heatmap(metric_4[metric_4['Course Owner'].isin(selected_owners_visual)])
-                    
-                    if heatmap_data is not None and not heatmap_data.empty:
-                        fig = px.imshow(
-                            heatmap_data,
-                            title="Owner Performance Heatmap",
-                            color_continuous_scale='RdYlGn',
-                            aspect="auto",
-                            labels=dict(color="Performance Score")
-                        )
-                        fig.update_layout(height=400)
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        st.markdown("""
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                        <strong>🎨 Heatmap Legend:</strong><br>
-                        • 🟢 Green = High performance<br>
-                        • 🟡 Yellow = Medium performance<br>
-                        • 🔴 Red = Low performance<br>
-                        • Compare owners across key metrics
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    # 6. Download Owner Visualizations
-                    st.markdown("### 📥 Export Owner Analysis")
-                    
-                    col_vis1, col_vis2 = st.columns(2)
-                    
-                    with col_vis1:
-                        # Create summary of selected owners
-                        owner_summary = metric_4[metric_4['Course Owner'].isin(selected_owners_visual)].copy()
-                        if not owner_summary.empty:
-                            csv_owner = owner_summary.to_csv(index=False)
-                            st.download_button(
-                                "📊 Download Selected Owner Data",
-                                csv_owner,
-                                "owner_performance_summary.csv",
-                                "text/csv",
-                                use_container_width=True
-                            )
-                    
-                    with col_vis2:
-                        if st.button("📸 Capture Visual Report", use_container_width=True):
-                            st.success("Owner visualizations captured! Use browser print (Ctrl+P) to save as PDF")
-                
-                else:
-                    st.info("👈 Please select owners from the dropdown above to see visual analytics")
-            else:
+
+            if metric_4.empty:
                 st.info("No owner performance data available")
+                st.stop()
+
+            # ==================== 1️⃣ OWNER FUNNEL (PRIMARY VISUAL) ====================
+            st.markdown("### 🔁 Owner Lead Funnel")
+            st.markdown("Select an owner to see their complete lead journey and conversion rates at each stage.")
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                selected_owner = st.selectbox(
+                    "Select Owner to Analyze",
+                    metric_4["Course Owner"].unique(),
+                    help="Choose an owner to see their detailed lead journey"
+                )
+            
+            with col2:
+                # Show key metrics for selected owner
+                row = metric_4[metric_4["Course Owner"] == selected_owner].iloc[0]
+                st.metric(
+                    "Lead → Customer %", 
+                    f"{row.get('Lead→Customer %', 0):.1f}%",
+                    f"{row.get('Customer', 0)} customers from {row.get('Grand Total', 0)} leads"
+                )
+            
+            # Create funnel visualization
+            stages = ["Cold", "Warm", "Hot", "Customer"]
+            values = [row.get(s, 0) for s in stages]
+            
+            fig = go.Figure(go.Funnel(
+                y=stages,
+                x=values,
+                textinfo="value+percent initial",
+                marker=dict(color=["#74c0fc", "#ffd43b", "#ff922b", "#51cf66"])
+            ))
+
+            fig.update_layout(
+                title=f"Lead Journey – {selected_owner}",
+                height=450,
+                showlegend=False
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Funnel conversion stats
+            if values[0] > 0:  # If there are Cold leads
+                col_stats1, col_stats2, col_stats3 = st.columns(3)
+                with col_stats1:
+                    cold_to_warm = (values[1] / values[0] * 100) if values[0] > 0 else 0
+                    st.metric("Cold → Warm", f"{cold_to_warm:.1f}%")
+                with col_stats2:
+                    warm_to_hot = (values[2] / values[1] * 100) if values[1] > 0 else 0
+                    st.metric("Warm → Hot", f"{warm_to_hot:.1f}%")
+                with col_stats3:
+                    hot_to_customer = (values[3] / values[2] * 100) if values[2] > 0 else 0
+                    st.metric("Hot → Customer", f"{hot_to_customer:.1f}%")
+
+            # ==================== 2️⃣ OWNER EFFICIENCY vs VOLUME (RANKING LOGIC) ====================
+            st.markdown("### 🎯 Owner Efficiency vs Lead Volume")
+            
+            # Prepare data for scatter plot
+            scatter_df = metric_4.copy()
+            scatter_df = scatter_df.sort_values("Lead→Customer %", ascending=False)
+            
+            fig = px.scatter(
+                scatter_df,
+                x="Grand Total",
+                y="Lead→Customer %",
+                size="Customer_Revenue",
+                color="Course Owner",
+                hover_name="Course Owner",
+                size_max=60,
+                title="Efficiency vs Volume (Bigger bubble = more revenue)",
+                hover_data={
+                    "Grand Total": True,
+                    "Lead→Customer %": ":.1f",
+                    "Customer": True,
+                    "Customer_Revenue": ":,.0f"
+                }
+            )
+
+            fig.update_layout(
+                xaxis_title="Total Leads Handled",
+                yaxis_title="Lead → Customer %",
+                height=500,
+                showlegend=False
+            )
+
+            # Median reference lines
+            median_conversion = scatter_df["Lead→Customer %"].median()
+            median_volume = scatter_df["Grand Total"].median()
+            
+            fig.add_hline(
+                y=median_conversion,
+                line_dash="dot",
+                line_color="gray",
+                annotation_text=f"Median Conversion: {median_conversion:.1f}%",
+                annotation_position="bottom right"
+            )
+            fig.add_vline(
+                x=median_volume,
+                line_dash="dot",
+                line_color="gray",
+                annotation_text=f"Median Volume: {median_volume:.0f}",
+                annotation_position="top right"
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Quadrant explanation
+            st.info("""
+            **How to read this chart:**
+            
+            🟢 **Top-Right Quadrant**: Best performers (High volume + High conversion)  
+            ⚠️ **Bottom-Right Quadrant**: High volume but poor conversion (needs coaching)  
+            📈 **Top-Left Quadrant**: Skilled but under-utilized (give more leads)  
+            🔄 **Bottom-Left Quadrant**: Needs improvement across metrics
+            
+            *Bubble size represents revenue generated*
+            """)
+
+            # ==================== 3️⃣ FUNNEL CONVERSION HEATMAP (COACHING TOOL) ====================
+            st.markdown("### 🔥 Funnel Conversion Heatmap")
+
+            # Calculate funnel conversion rates
+            heatmap_df = metric_4.copy()
+            
+            # Safely calculate conversion percentages
+            heatmap_df["Cold→Warm %"] = np.where(
+                heatmap_df["Cold"] > 0,
+                (heatmap_df["Warm"] / heatmap_df["Cold"] * 100).round(1),
+                0
+            )
+            
+            heatmap_df["Warm→Hot %"] = np.where(
+                heatmap_df["Warm"] > 0,
+                (heatmap_df["Hot"] / heatmap_df["Warm"] * 100).round(1),
+                0
+            )
+            
+            heatmap_df["Hot→Customer %"] = np.where(
+                heatmap_df["Hot"] > 0,
+                (heatmap_df["Customer"] / heatmap_df["Hot"] * 100).round(1),
+                0
+            )
+            
+            # Prepare data for heatmap
+            heatmap_data = heatmap_df.set_index("Course Owner")[
+                ["Cold→Warm %", "Warm→Hot %", "Hot→Customer %"]
+            ]
+            
+            # Sort by overall performance
+            heatmap_data["Overall"] = heatmap_data.mean(axis=1)
+            heatmap_data = heatmap_data.sort_values("Overall", ascending=False)
+            heatmap_data = heatmap_data.drop(columns=["Overall"])
+
+            fig = px.imshow(
+                heatmap_data,
+                color_continuous_scale="RdYlGn",
+                aspect="auto",
+                title="Owner Funnel Conversion (%) - Red = Problem, Green = Strength",
+                text_auto=".1f",
+                labels=dict(color="Conversion %")
+            )
+
+            fig.update_layout(
+                height=450,
+                xaxis_title="Funnel Stage",
+                yaxis_title="Owner"
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Heatmap insights
+            st.warning("""
+            **Coaching Insights from Heatmap:**
+            
+            1. **Red cells**: Critical conversion drop-off points for specific owners  
+            2. **Green cells**: Owner strengths in specific funnel stages  
+            3. **Vertical patterns**: Consistent weakness across multiple owners = process issue  
+            4. **Horizontal patterns**: Individual owner skills gaps = training opportunity
+            """)
+
+            # ==================== 4️⃣ OWNER RANKING (CLEAN & HONEST) ====================
+            st.markdown("### 🏆 Owner Ranking by Conversion Rate")
+            
+            # Prepare ranking data
+            rank_df = metric_4.copy()
+            rank_df = rank_df.sort_values("Lead→Customer %", ascending=False)
+            rank_df["Rank"] = range(1, len(rank_df) + 1)
+            
+            # Create horizontal bar chart
+            fig = px.bar(
+                rank_df,
+                x="Lead→Customer %",
+                y="Course Owner",
+                orientation="h",
+                color="Lead→Customer %",
+                color_continuous_scale="Viridis",
+                title="Owner Ranking (Lead → Customer %)",
+                text="Lead→Customer %",
+                hover_data={
+                    "Grand Total": True,
+                    "Customer": True,
+                    "Rank": True,
+                    "Lead→Customer %": ":.1f"
+                }
+            )
+            
+            fig.update_traces(
+                texttemplate='%{text:.1f}%',
+                textposition='outside'
+            )
+            
+            fig.update_layout(
+                height=max(400, len(rank_df) * 30),
+                xaxis_title="Conversion Rate (%)",
+                yaxis_title="",
+                yaxis={'categoryorder': 'total ascending'},
+                showlegend=False
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Top 3 performers highlight
+            if len(rank_df) >= 3:
+                st.success(f"""
+                **🎖️ Top Performers:**
+                1. **{rank_df.iloc[0]['Course Owner']}** - {rank_df.iloc[0]['Lead→Customer %']:.1f}% conversion
+                2. **{rank_df.iloc[1]['Course Owner']}** - {rank_df.iloc[1]['Lead→Customer %']:.1f}% conversion  
+                3. **{rank_df.iloc[2]['Course Owner']}** - {rank_df.iloc[2]['Lead→Customer %']:.1f}% conversion
+                """)
+            
+            # Download owner analysis
+            st.markdown("### 📥 Export Owner Analysis")
+            col_dl1, col_dl2 = st.columns(2)
+            
+            with col_dl1:
+                csv_data = metric_4.to_csv(index=False)
+                st.download_button(
+                    "📊 Download Owner Performance Data",
+                    csv_data,
+                    "owner_performance_analysis.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
+            
+            with col_dl2:
+                # Create detailed analysis
+                analysis_text = f"""
+                Owner Performance Analysis
+                Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                Total Owners: {len(metric_4)}
+                
+                Key Insights:
+                1. Best Converter: {rank_df.iloc[0]['Course Owner']} ({rank_df.iloc[0]['Lead→Customer %']:.1f}%)
+                2. Median Conversion: {median_conversion:.1f}%
+                3. Total Leads Handled: {metric_4['Grand Total'].sum():,}
+                4. Total Customers Generated: {metric_4['Customer'].sum():,}
+                5. Overall Conversion Rate: {(metric_4['Customer'].sum() / metric_4['Grand Total'].sum() * 100):.1f}%
+                
+                Training Priorities (Lowest Conversion):
+                """
+                
+                for i in range(min(3, len(rank_df))):
+                    owner = rank_df.iloc[-1-i]['Course Owner']
+                    rate = rank_df.iloc[-1-i]['Lead→Customer %']
+                    analysis_text += f"\n{i+1}. {owner} ({rate:.1f}%)"
+                
+                st.download_button(
+                    "📝 Download Analysis Summary",
+                    analysis_text,
+                    "owner_analysis_summary.txt",
+                    "text/plain",
+                    use_container_width=True
+                )
         
         # SECTION 6: Volume vs Conversion Matrix
         with tab6:
@@ -3505,20 +3345,20 @@ def main():
                     </div>
                     
                     <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
-                        <h5>👑 NEW: Course Owner Visual Analytics</h5>
-                        <p>Beautiful visualizations to understand owner performance:</p>
+                        <h5>👑 UPDATED: Course Owner Visual Analytics</h5>
+                        <p><strong>Decision-ready visuals that answer "WHAT TO FIX?"</strong></p>
                         <div style='display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 15px;'>
-                            <div style='background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 10px; border-radius: 5px;'>
-                                <strong>🏆 Scorecards</strong><br>Visual owner performance cards
+                            <div style='background: linear-gradient(135deg, #74c0fc, #4dabf7); color: white; padding: 10px; border-radius: 5px;'>
+                                <strong>🔁 Owner Funnel</strong><br>Complete lead journey visualization
                             </div>
-                            <div style='background: linear-gradient(135deg, #2E8B57, #3CB371); color: white; padding: 10px; border-radius: 5px;'>
-                                <strong>📊 Radar Charts</strong><br>Compare multiple owners
+                            <div style='background: linear-gradient(135deg, #ffd43b, #ffc078); color: white; padding: 10px; border-radius: 5px;'>
+                                <strong>🎯 Efficiency vs Volume</strong><br>Rank owners with quadrant analysis
                             </div>
-                            <div style='background: linear-gradient(135deg, #FF7A59, #FFA500); color: white; padding: 10px; border-radius: 5px;'>
-                                <strong>📉 Funnel Charts</strong><br>Pipeline visualization
+                            <div style='background: linear-gradient(135deg, #ff6b6b, #ff922b); color: white; padding: 10px; border-radius: 5px;'>
+                                <strong>🔥 Funnel Heatmap</strong><br>Spot conversion problems instantly
                             </div>
-                            <div style='background: linear-gradient(135deg, #8A2BE2, #9370DB); color: white; padding: 10px; border-radius: 5px;'>
-                                <strong>🔥 Heatmaps</strong><br>Performance at a glance
+                            <div style='background: linear-gradient(135deg, #51cf66, #40c057); color: white; padding: 10px; border-radius: 5px;'>
+                                <strong>🏆 Clean Ranking</strong><br>Honest performance comparison
                             </div>
                         </div>
                     </div>
