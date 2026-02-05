@@ -1,67 +1,452 @@
 import streamlit as st
-import pandas as pd
 import requests
-from datetime import datetime, timedelta
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime, timedelta, date
 import pytz
-from typing import Dict, List, Optional, Tuple
+import time
+import json
+import io
+import numpy as np
+from collections import Counter
+import re
+import xlsxwriter
+from io import BytesIO
 
-# Page configuration
+# Set page config
 st.set_page_config(
-    page_title="KPI Dashboard",
+    page_title="HubSpot Business Analytics",
     page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Custom CSS for cleaner UI
+# UI Configuration Constants
+TOP_N = 10  # Limit charts to top N items
+MAX_LABEL_LENGTH = 25  # Truncate long labels
+CHART_HEIGHT = 420
+COLOR_PALETTE = px.colors.qualitative.Set2
+
+# Will be populated dynamically
+CUSTOMER_DEAL_STAGES = []  # Will contain stage IDs, not labels
+
+# Custom CSS for better styling
 st.markdown("""
-    <style>
+<style>
     .main-header {
         font-size: 2.5rem;
-        font-weight: bold;
-        color: #1A73E8;
+        color: #1a1a1a;
         margin-bottom: 1rem;
     }
-    .kpi-card {
+    .sub-header {
+        font-size: 1.5rem;
+        color: #666;
+        margin-bottom: 1rem;
+    }
+    .stats-card {
         background-color: #f8f9fa;
-        border-radius: 10px;
-        padding: 20px;
-        border-left: 5px solid #1A73E8;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        margin-bottom: 20px;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #ff7a59;
+        margin-bottom: 1rem;
     }
-    .kpi-title {
-        font-size: 1rem;
-        color: #5f6368;
-        margin-bottom: 5px;
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 0.5rem;
+        color: white;
+        text-align: center;
     }
-    .kpi-value {
-        font-size: 2rem;
+    .header-container {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 0.5rem;
+        color: white;
+        margin-bottom: 2rem;
+    }
+    .warning-box {
+        background-color: #fff3cd;
+        color: #856404;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+        border: 1px solid #ffeaa7;
+    }
+    .quality-high-red {
+        background-color: #f8d7da !important;
+        color: #721c24 !important;
         font-weight: bold;
-        color: #202124;
     }
-    .kpi-change {
-        font-size: 0.9rem;
+    .quality-high-green {
+        background-color: #d4edda !important;
+        color: #155724 !important;
+        font-weight: bold;
+    }
+    .section-header {
+        background: linear-gradient(90deg, #f8f9fa 0%, #e9ecef 100%);
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1.5rem 0 1rem 0;
+        border-left: 4px solid #4dabf7;
+    }
+    .kpi-card {
+        background: white;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border: 1px solid #dee2e6;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        text-align: center;
+    }
+    .comparison-card {
+        background: linear-gradient(135deg, #fdfcfb 0%, #e2d1c3 100%);
+        padding: 1.5rem;
+        border-radius: 0.5rem;
+        border: 1px solid #ddd;
+        margin-bottom: 1rem;
+    }
+    .unassigned-badge {
+        background-color: #ffeaa7;
+        color: #856404;
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.2rem;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+    
+    .kpi-container {
+        display: flex;
+        justify-content: center;
+        align-items: stretch;
+        gap: 20px;
+        margin: 20px 0;
+        flex-wrap: wrap;
+    }
+    
+    .kpi-box {
+        min-width: 220px !important;
+        max-width: 220px !important;
+        height: 130px !important;
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        border-radius: 12px;
+        padding: 16px;
+        text-align: center;
+        color: white;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        transition: transform 0.2s ease;
+    }
+    
+    .kpi-box:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+    }
+    
+    .kpi-title {
+        font-size: 14px;
+        opacity: 0.9;
+        margin-bottom: 8px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    .kpi-value {
+        font-size: 34px !important;
+        font-weight: 700 !important;
+        line-height: 1.2 !important;
+        margin: 5px 0;
+    }
+    
+    .kpi-sub {
+        font-size: 13px;
+        opacity: 0.85;
         margin-top: 5px;
     }
-    .positive {
-        color: #0d9d58;
+    
+    .kpi-box-blue {
+        background: linear-gradient(135deg, #4A6FA5, #166088);
     }
-    .negative {
-        color: #ea4335;
+    
+    .kpi-box-green {
+        background: linear-gradient(135deg, #2E8B57, #3CB371);
     }
-    .stDateInput > div > div > input {
-        font-size: 14px;
+    
+    .kpi-box-orange {
+        background: linear-gradient(135deg, #FF7A59, #FFA500);
     }
-    </style>
+    
+    .kpi-box-purple {
+        background: linear-gradient(135deg, #8A2BE2, #9370DB);
+    }
+    
+    .kpi-box-teal {
+        background: linear-gradient(135deg, #20B2AA, #48D1CC);
+    }
+    
+    .kpi-box-red {
+        background: linear-gradient(135deg, #DC143C, #FF6347);
+    }
+    
+    .kpi-box-yellow {
+        background: linear-gradient(135deg, #FFD700, #FFA500);
+    }
+    
+    .secondary-kpi-container {
+        display: flex;
+        justify-content: center;
+        gap: 15px;
+        margin: 15px 0;
+        flex-wrap: wrap;
+    }
+    
+    .secondary-kpi-box {
+        min-width: 150px !important;
+        max-width: 150px !important;
+        height: 100px !important;
+        background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+        border-radius: 8px;
+        padding: 12px;
+        text-align: center;
+        color: #333;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        border: 1px solid #dee2e6;
+    }
+    
+    .secondary-kpi-title {
+        font-size: 12px;
+        opacity: 0.8;
+        margin-bottom: 5px;
+        font-weight: 500;
+    }
+    
+    .secondary-kpi-value {
+        font-size: 24px !important;
+        font-weight: 700 !important;
+        line-height: 1.2 !important;
+        margin: 3px 0;
+    }
+    
+    .secondary-kpi-sub {
+        font-size: 11px;
+        opacity: 0.7;
+        margin-top: 3px;
+    }
+    
+    .revenue-kpi {
+        background: linear-gradient(135deg, #FFD700, #FFA500);
+    }
+    
+    .conversion-kpi {
+        background: linear-gradient(135deg, #20B2AA, #48D1CC);
+    }
+    
+    .deal-kpi {
+        background: linear-gradient(135deg, #9370DB, #8A2BE2);
+    }
+    
+    .warning-card {
+        background: linear-gradient(135deg, #fff3cd, #ffeaa7);
+        border: 1px solid #ffc107;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 10px 0;
+    }
+    
+    .success-card {
+        background: linear-gradient(135deg, #d4edda, #c3e6cb);
+        border: 1px solid #28a745;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 10px 0;
+    }
+    
+    .error-card {
+        background: linear-gradient(135deg, #f8d7da, #f5c6cb);
+        border: 1px solid #dc3545;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 10px 0;
+    }
+    
+    .data-fix-card {
+        background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
+        border: 1px solid #4f46e5;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 10px 0;
+    }
+    
+    /* ✅ NEW: Revenue and Matrix Styles */
+    .revenue-card {
+        background: linear-gradient(135deg, #4CAF50, #8BC34A);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        text-align: center;
+    }
+    
+    .matrix-star {
+        background-color: #d4edda !important;
+        color: #155724 !important;
+        font-weight: bold;
+    }
+    
+    .matrix-potential {
+        background-color: #cce5ff !important;
+        color: #004085 !important;
+        font-weight: bold;
+    }
+    
+    .matrix-burn {
+        background-color: #fff3cd !important;
+        color: #856404 !important;
+        font-weight: bold;
+    }
+    
+    .matrix-weak {
+        background-color: #f8d7da !important;
+        color: #721c24 !important;
+        font-weight: bold;
+    }
+    
+    /* ✅ NEW: Download Button Styles */
+    .download-btn {
+        background: linear-gradient(135deg, #28a745, #20c997);
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 0.5rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        text-decoration: none;
+    }
+    
+    .download-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
+        color: white;
+        text-decoration: none;
+    }
+    
+    .download-btn-excel {
+        background: linear-gradient(135deg, #217346, #1e7e34);
+    }
+    
+    .download-btn-csv {
+        background: linear-gradient(135deg, #007bff, #0056b3);
+    }
+    
+    .download-btn-all {
+        background: linear-gradient(135deg, #6f42c1, #6610f2);
+    }
+    
+    .download-section {
+        background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+        padding: 1.5rem;
+        border-radius: 0.75rem;
+        border: 1px solid #dee2e6;
+        margin: 1.5rem 0;
+    }
+    
+    .download-header {
+        color: #2c3e50;
+        font-size: 1.25rem;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    /* ✅ NEW: Owner Visualization Styles */
+    .owner-scorecard {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        margin: 1rem 0;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        text-align: center;
+    }
+    
+    .owner-scorecard-green {
+        background: linear-gradient(135deg, #2E8B57, #3CB371);
+    }
+    
+    .owner-scorecard-blue {
+        background: linear-gradient(135deg, #4A6FA5, #166088);
+    }
+    
+    .owner-scorecard-orange {
+        background: linear-gradient(135deg, #FF7A59, #FFA500);
+    }
+    
+    .owner-scorecard-purple {
+        background: linear-gradient(135deg, #8A2BE2, #9370DB);
+    }
+    
+    .owner-ranking-gold {
+        background: linear-gradient(135deg, #FFD700, #FFA500);
+    }
+    
+    .owner-ranking-silver {
+        background: linear-gradient(135deg, #C0C0C0, #A9A9A9);
+    }
+    
+    .owner-ranking-bronze {
+        background: linear-gradient(135deg, #CD7F32, #A0522D);
+    }
+    
+    .owner-visual-section {
+        background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+        padding: 1.5rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        border: 1px solid #dee2e6;
+    }
+</style>
 """, unsafe_allow_html=True)
 
 # Constants
-HUBSPOT_ACCESS_TOKEN = "your_hubspot_access_token_here"
-HUBSPOT_BASE_URL = "https://api.hubapi.com"
+HUBSPOT_API_BASE = "https://api.hubapi.com"
+IST = pytz.timezone('Asia/Kolkata')
 
-# Helper function to check if payment date is outside dashboard range
-def is_outside_range(payment_date: Optional[str], start_date: datetime.date, end_date: datetime.date) -> bool:
+# ✅ SECURITY: Load API key from Streamlit secrets
+def get_api_key():
+    """Safely load API key from Streamlit secrets"""
+    try:
+        if "hubspot" in st.secrets and "api_key" in st.secrets["hubspot"]:
+            api_key = st.secrets["hubspot"]["api_key"]
+            if api_key and api_key.startswith("pat-"):
+                return api_key
+        
+        if "HUBSPOT_API_KEY" in st.secrets:
+            api_key = st.secrets["HUBSPOT_API_KEY"]
+            if api_key and api_key.startswith("pat-"):
+                return api_key
+        
+        import os
+        api_key = os.getenv("HUBSPOT_API_KEY")
+        if api_key and api_key.startswith("pat-"):
+            return api_key
+        
+        return None
+        
+    except Exception as e:
+        st.error(f"Error loading API key: {str(e)}")
+        return None
+
+# ✅ Helper function for partial payment logic
+def is_outside_range(payment_date, start_date, end_date):
     """Check if payment date is outside the selected date range."""
     if not payment_date:
         return False
@@ -72,7 +457,7 @@ def is_outside_range(payment_date: Optional[str], start_date: datetime.date, end
     except:
         return False
 
-def safe_float(value, default=0.0) -> float:
+def safe_float(value, default=0.0):
     """Safely convert value to float, handling None, strings with commas, etc."""
     if value is None:
         return default
@@ -84,22 +469,1031 @@ def safe_float(value, default=0.0) -> float:
     except:
         return default
 
-def fetch_hubspot_deals(start_date: datetime, end_date: datetime, token: str) -> List[Dict]:
-    """Fetch deals from HubSpot with all necessary properties."""
+# ✅ CRITICAL FIX: Lead Status Mapping - ABSOLUTELY NO CUSTOMER HERE!
+LEAD_STATUS_MAP = {
+    "cold": "Cold",
+    "warm": "Warm", 
+    "hot": "Hot",
+    "new": "New Lead",
+    "open": "New Lead",
+    "neutral_prospect": "Cold",
+    "prospect": "Warm",  
+    "hot_prospect": "Hot",
+    "not_connected": "Not Connected (NC)",
+    "not_interested": "Not Interested", 
+    "unqualified": "Not Qualified",
+    "not_qualified": "Not Qualified",
+    "duplicate": "Duplicate",
+    "junk": "Duplicate",
+    "": "Unknown",
+    None: "Unknown",
+    "unknown": "Unknown",
+    "other": "Unknown"
+}
+
+# ✅ CRITICAL FIX: List of terms that should NEVER become "Customer" in leads
+CUSTOMER_KEYWORDS_BLOCKLIST = [
+    "customer", "closed", "won", "admission", "confirmed", 
+    "contract", "signed", "paid", "payment", "completed"
+]
+
+# ✅ NEW: KPI Rendering Functions
+def render_kpi(title, value, subtitle="", color_class=""):
+    """Render a professional KPI card with fixed size."""
+    color_class = color_class or ""
+    return f"""
+    <div class="kpi-box {color_class}">
+        <div class="kpi-title">{title}</div>
+        <div class="kpi-value">{value}</div>
+        <div class="kpi-sub">{subtitle}</div>
+    </div>
+    """
+
+def render_secondary_kpi(title, value, subtitle=""):
+    """Render a smaller secondary KPI card."""
+    return f"""
+    <div class="secondary-kpi-box">
+        <div class="secondary-kpi-title">{title}</div>
+        <div class="secondary-kpi-value">{value}</div>
+        <div class="secondary-kpi-sub">{subtitle}</div>
+    </div>
+    """
+
+def render_kpi_row(kpis, container_class="kpi-container"):
+    """Render a row of KPI cards."""
+    kpi_html = "".join(kpis)
+    return f"""
+    <div class="{container_class}">
+        {kpi_html}
+    </div>
+    """
+
+# ✅ NEW: Enhanced Excel Export Function
+def create_excel_report(df_contacts, df_customers, metrics, kpis, date_range, date_field):
+    """Create a professional Excel report with multiple sheets and formatting."""
+    
+    # Create an in-memory BytesIO object
+    output = BytesIO()
+    
+    # Create Excel writer with XlsxWriter engine
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        workbook = writer.book
+        
+        # Define formats
+        header_format = workbook.add_format({
+            'bold': True,
+            'font_size': 12,
+            'bg_color': '#4F81BD',
+            'font_color': 'white',
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1
+        })
+        
+        number_format = workbook.add_format({
+            'num_format': '#,##0',
+            'align': 'right',
+            'border': 1
+        })
+        
+        percent_format = workbook.add_format({
+            'num_format': '0.0%',
+            'align': 'right',
+            'border': 1
+        })
+        
+        # Sheet 1: Executive Summary
+        summary_data = {
+            'Metric': [
+                'Total Leads',
+                'Deal Leads (Hot+Warm+Cold+Customer)',
+                'Customers',
+                'Hot Leads',
+                'Warm Leads', 
+                'Cold Leads',
+                'New Leads',
+                'Not Connected',
+                'Not Interested',
+                'Not Qualified',
+                'Duplicate',
+                'Lead → Deal %',
+                'Lead → Customer %',
+                'Deal → Customer %',
+                'Total Revenue',
+                'Avg Revenue per Customer'
+            ],
+            'Count': [
+                kpis['total_leads'],
+                kpis['deal_leads'],
+                kpis['customer'],
+                kpis['hot'],
+                kpis['warm'],
+                kpis['cold'],
+                kpis['new_lead'],
+                kpis['not_connected'],
+                kpis['not_interested'],
+                kpis['not_qualified'],
+                kpis['duplicate'],
+                kpis['lead_to_deal_pct']/100,
+                kpis['lead_to_customer_pct']/100,
+                kpis['deal_to_customer_pct']/100,
+                kpis['total_revenue'],
+                kpis['avg_revenue_per_customer'] if kpis['avg_revenue_per_customer'] > 0 else 0
+            ]
+        }
+        
+        summary_df = pd.DataFrame(summary_data)
+        summary_df.to_excel(writer, sheet_name='Executive Summary', index=False)
+        
+        worksheet = writer.sheets['Executive Summary']
+        
+        # Apply formatting
+        for col_num, value in enumerate(summary_df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
+        
+        # Set column widths
+        worksheet.set_column('A:A', 35)
+        worksheet.set_column('B:B', 20)
+        
+        # Add report header
+        worksheet.merge_range('D1:F1', 'HubSpot Analytics Report', workbook.add_format({
+            'bold': True, 'font_size': 16, 'align': 'center', 'valign': 'vcenter'
+        }))
+        
+        worksheet.merge_range('D2:F2', f'Date Field: {date_field}', workbook.add_format({
+            'align': 'center'
+        }))
+        
+        worksheet.merge_range('D3:F3', f'Date Range: {date_range[0]} to {date_range[1]}', workbook.add_format({
+            'align': 'center'
+        }))
+        
+        worksheet.merge_range('D4:F4', f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', workbook.add_format({
+            'align': 'center'
+        }))
+        
+        # Sheet 2: Raw Lead Data
+        if not df_contacts.empty:
+            df_contacts.to_excel(writer, sheet_name='Raw Lead Data', index=False)
+            worksheet = writer.sheets['Raw Lead Data']
+            
+            # Apply formatting
+            for col_num, value in enumerate(df_contacts.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # Auto-adjust column widths
+            for i, col in enumerate(df_contacts.columns):
+                column_len = max(df_contacts[col].astype(str).map(len).max(), len(col)) + 2
+                worksheet.set_column(i, i, min(column_len, 50))
+        
+        # Sheet 3: Customer Data
+        if df_customers is not None and not df_customers.empty:
+            df_customers.to_excel(writer, sheet_name='Customer Data', index=False)
+            worksheet = writer.sheets['Customer Data']
+            
+            for col_num, value in enumerate(df_customers.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+        
+        # Sheet 4: Owner Performance (Metric 4)
+        if 'metric_4' in metrics and not metrics['metric_4'].empty:
+            metric_4 = metrics['metric_4'].copy()
+            metric_4.to_excel(writer, sheet_name='Owner Performance', index=False)
+            
+            worksheet = writer.sheets['Owner Performance']
+            for col_num, value in enumerate(metric_4.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # Format percentages
+            percent_columns = ['Deal %', 'Customer %', 'Lead→Customer %', 'Lead→Deal %']
+            num_rows = len(metric_4)
+            num_cols = len(metric_4.columns)
+            
+            for row in range(1, num_rows + 1):
+                for col in range(num_cols):
+                    col_name = metric_4.columns[col]
+                    if col_name in percent_columns:
+                        value = metric_4.iloc[row-1, col]
+                        if pd.notnull(value):
+                            worksheet.write(row, col, value/100, percent_format)
+                    elif col_name not in ['Course Owner'] and col_name != 'Customer_Revenue':
+                        value = metric_4.iloc[row-1, col]
+                        if pd.notnull(value):
+                            worksheet.write(row, col, value, number_format)
+        
+        # Sheet 5: Course Performance (NEW METRIC)
+        if 'metric_5' in metrics and not metrics['metric_5'].empty:
+            metric_5 = metrics['metric_5'].copy()
+            metric_5.to_excel(writer, sheet_name='Course Performance', index=False)
+            
+            worksheet = writer.sheets['Course Performance']
+            for col_num, value in enumerate(metric_5.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # Format percentages
+            percent_columns = ['Deal %', 'Customer %', 'Lead→Customer %', 'Lead→Deal %']
+            num_rows = len(metric_5)
+            num_cols = len(metric_5.columns)
+            
+            for row in range(1, num_rows + 1):
+                for col in range(num_cols):
+                    col_name = metric_5.columns[col]
+                    if col_name in percent_columns:
+                        value = metric_5.iloc[row-1, col]
+                        if pd.notnull(value):
+                            worksheet.write(row, col, value/100, percent_format)
+                    elif col_name not in ['Course'] and col_name != 'Customer_Revenue':
+                        value = metric_5.iloc[row-1, col]
+                        if pd.notnull(value):
+                            worksheet.write(row, col, value, number_format)
+        
+        # Sheet 6: Lead Status Summary
+        if not df_contacts.empty:
+            status_summary = df_contacts['Lead Status'].value_counts().reset_index()
+            status_summary.columns = ['Lead Status', 'Count']
+            status_summary['Percentage'] = (status_summary['Count'] / len(df_contacts) * 100).round(1)
+            
+            status_summary.to_excel(writer, sheet_name='Lead Status Summary', index=False)
+            
+            worksheet = writer.sheets['Lead Status Summary']
+            for col_num, value in enumerate(status_summary.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # Format percentages
+            for row in range(1, len(status_summary) + 1):
+                worksheet.write(row, 2, status_summary.iloc[row-1, 2]/100, percent_format)
+                worksheet.write(row, 1, status_summary.iloc[row-1, 1], number_format)
+        
+        # Sheet 7: Revenue Analysis
+        if df_customers is not None and not df_customers.empty:
+            revenue_summary = df_customers.groupby('Course/Program').agg(
+                Customer_Count=('Is Customer', 'count'),
+                Total_Revenue=('Amount', 'sum'),
+                Avg_Revenue=('Amount', 'mean')
+            ).reset_index()
+            
+            revenue_summary = revenue_summary.sort_values('Total_Revenue', ascending=False)
+            revenue_summary.to_excel(writer, sheet_name='Revenue Analysis', index=False)
+            
+            worksheet = writer.sheets['Revenue Analysis']
+            for col_num, value in enumerate(revenue_summary.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # Format revenue columns
+            for row in range(1, len(revenue_summary) + 1):
+                worksheet.write(row, 2, revenue_summary.iloc[row-1, 2], number_format)
+                worksheet.write(row, 3, revenue_summary.iloc[row-1, 3], number_format)
+    
+    # Get the Excel data
+    excel_data = output.getvalue()
+    return excel_data
+
+# ✅ NEW: Attractive Owner Visualization Functions
+def create_owner_performance_heatmap(metric_4):
+    """Create heatmap visualization for owner performance."""
+    if metric_4.empty:
+        return None
+    
+    # Select top owners by total leads
+    top_owners = metric_4.nlargest(15, 'Grand Total') if 'Grand Total' in metric_4.columns else metric_4.head(15)
+    
+    # Prepare data for heatmap - use key metrics
+    heatmap_data = top_owners[['Course Owner', 'Lead→Customer %', 'Lead→Deal %', 'Customer %']].copy()
+    heatmap_data = heatmap_data.set_index('Course Owner')
+    
+    # Truncate owner names for better display
+    heatmap_data.index = [name[:20] + '...' if len(name) > 20 else name for name in heatmap_data.index]
+    
+    return heatmap_data
+
+def create_owner_radar_chart(metric_4, selected_owners=None):
+    """Create radar chart comparing multiple owners."""
+    if metric_4.empty or len(metric_4) < 2:
+        return None, None
+    
+    # Select owners to compare
+    if selected_owners and len(selected_owners) > 0:
+        compare_owners = metric_4[metric_4['Course Owner'].isin(selected_owners)].copy()
+    else:
+        # Default: top 3 owners by Grand Total
+        compare_owners = metric_4.nlargest(4, 'Grand Total').copy() if 'Grand Total' in metric_4.columns else metric_4.head(4).copy()
+    
+    if len(compare_owners) < 2:
+        return None, None
+    
+    # Prepare data for radar chart
+    radar_metrics = ['Lead→Customer %', 'Lead→Deal %', 'Customer %']
+    
+    # Check if we have funnel metrics
+    funnel_metrics = []
+    for metric in ['Cold', 'Warm', 'Hot']:
+        if metric in compare_owners.columns:
+            funnel_metrics.append(metric)
+    
+    # Use funnel metrics if available
+    if len(funnel_metrics) >= 2:
+        radar_metrics = funnel_metrics[:3]  # Use up to 3 funnel metrics
+    
+    # Prepare data
+    categories = radar_metrics
+    fig = go.Figure()
+    
+    colors = px.colors.qualitative.Set3
+    
+    for idx, (_, owner_row) in enumerate(compare_owners.iterrows()):
+        owner_name = owner_row['Course Owner'][:15] + '...' if len(owner_row['Course Owner']) > 15 else owner_row['Course Owner']
+        
+        values = []
+        for category in categories:
+            if category in ['Lead→Customer %', 'Lead→Deal %', 'Customer %']:
+                values.append(owner_row.get(category, 0))
+            else:
+                # For funnel metrics, calculate percentage of Grand Total
+                if 'Grand Total' in owner_row and owner_row['Grand Total'] > 0:
+                    values.append((owner_row.get(category, 0) / owner_row['Grand Total']) * 100)
+                else:
+                    values.append(0)
+        
+        # Add to radar chart
+        fig.add_trace(go.Scatterpolar(
+            r=values,
+            theta=categories,
+            fill='toself',
+            name=owner_name,
+            line_color=colors[idx % len(colors)],
+            opacity=0.7
+        ))
+    
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 100],
+                tickfont=dict(size=10)
+            ),
+        ),
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=1.1
+        ),
+        height=500,
+        margin=dict(l=80, r=80, t=40, b=40)
+    )
+    
+    return fig, compare_owners['Course Owner'].tolist()
+
+def create_owner_scorecards(metric_4, top_n=6):
+    """Create visual scorecards for top owners."""
+    if metric_4.empty:
+        return []
+    
+    # Get top owners by conversion rate
+    top_owners = metric_4.nlargest(top_n, 'Lead→Customer %').copy() if 'Lead→Customer %' in metric_4.columns else metric_4.head(top_n).copy()
+    
+    scorecards = []
+    color_classes = ['owner-scorecard-green', 'owner-scorecard-blue', 'owner-scorecard-orange', 
+                     'owner-scorecard-purple', 'owner-scorecard', 'owner-scorecard-green']
+    
+    for idx, (_, owner_row) in enumerate(top_owners.iterrows()):
+        owner_name = owner_row['Course Owner']
+        conversion_rate = owner_row.get('Lead→Customer %', 0)
+        deal_rate = owner_row.get('Lead→Deal %', 0)
+        total_leads = owner_row.get('Grand Total', 0)
+        customers = owner_row.get('Customer', 0)
+        
+        color_class = color_classes[idx % len(color_classes)]
+        
+        # Determine performance badge
+        if conversion_rate >= 10:
+            performance_badge = "🏆 TOP PERFORMER"
+        elif conversion_rate >= 5:
+            performance_badge = "⭐ GOOD"
+        elif conversion_rate > 0:
+            performance_badge = "📈 AVERAGE"
+        else:
+            performance_badge = "📊 NEEDS IMPROVEMENT"
+        
+        scorecard_html = f"""
+        <div class="owner-scorecard {color_class}">
+            <h4 style="margin: 0 0 10px 0; font-size: 1.2rem;">{owner_name[:25]}{'...' if len(owner_name) > 25 else ''}</h4>
+            <div style="display: flex; justify-content: space-between; margin: 10px 0;">
+                <div style="text-align: center;">
+                    <div style="font-size: 2rem; font-weight: bold;">{conversion_rate}%</div>
+                    <div style="font-size: 0.8rem;">Lead→Customer</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 2rem; font-weight: bold;">{deal_rate}%</div>
+                    <div style="font-size: 0.8rem;">Lead→Deal</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 2rem; font-weight: bold;">{customers}</div>
+                    <div style="font-size: 0.8rem;">Customers</div>
+                </div>
+            </div>
+            <div style="margin-top: 10px; font-size: 0.9rem; background: rgba(255,255,255,0.2); padding: 5px; border-radius: 5px;">
+                {performance_badge} | {total_leads:,} total leads
+            </div>
+        </div>
+        """
+        
+        scorecards.append(scorecard_html)
+    
+    return scorecards
+
+def create_owner_funnel_chart(metric_4, selected_owners=None):
+    """Create funnel visualization for selected owners."""
+    if metric_4.empty:
+        return None
+    
+    if selected_owners and len(selected_owners) > 0:
+        compare_data = metric_4[metric_4['Course Owner'].isin(selected_owners)].copy()
+    else:
+        compare_data = metric_4.nlargest(3, 'Grand Total').copy() if 'Grand Total' in metric_4.columns else metric_4.head(3).copy()
+    
+    if compare_data.empty:
+        return None
+    
+    # Prepare funnel data
+    funnel_stages = ['Cold', 'Warm', 'Hot', 'Customer']
+    available_stages = [stage for stage in funnel_stages if stage in compare_data.columns]
+    
+    if not available_stages:
+        return None
+    
+    # Create funnel chart
+    fig = go.Figure()
+    
+    for _, owner_row in compare_data.iterrows():
+        owner_name = owner_row['Course Owner'][:15] + '...' if len(owner_row['Course Owner']) > 15 else owner_row['Course Owner']
+        
+        values = []
+        for stage in available_stages:
+            values.append(owner_row.get(stage, 0))
+        
+        fig.add_trace(go.Funnel(
+            name=owner_name,
+            y=available_stages,
+            x=values,
+            textinfo="value+percent initial",
+            opacity=0.8
+        ))
+    
+    fig.update_layout(
+        title="Owner Funnel Comparison",
+        funnelmode="stack",
+        height=500,
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=1.05
+        )
+    )
+    
+    return fig
+
+def create_owner_performance_grid(metric_4):
+    """Create a grid view of owner performance."""
+    if metric_4.empty:
+        return None
+    
+    # Sort by Lead→Customer %
+    performance_grid = metric_4.copy()
+    if 'Lead→Customer %' in performance_grid.columns:
+        performance_grid = performance_grid.sort_values('Lead→Customer %', ascending=False)
+    
+    # Select top 12 owners
+    performance_grid = performance_grid.head(12)
+    
+    # Create grid HTML
+    grid_html = """
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; margin: 20px 0;">
+    """
+    
+    for idx, (_, owner_row) in enumerate(performance_grid.iterrows()):
+        owner_name = owner_row['Course Owner']
+        conversion_rate = owner_row.get('Lead→Customer %', 0)
+        total_leads = owner_row.get('Grand Total', 0)
+        customers = owner_row.get('Customer', 0)
+        
+        # Determine color based on conversion rate
+        if conversion_rate >= 10:
+            bg_color = "linear-gradient(135deg, #d4edda, #c3e6cb)"
+            border_color = "#28a745"
+        elif conversion_rate >= 5:
+            bg_color = "linear-gradient(135deg, #fff3cd, #ffeaa7)"
+            border_color = "#ffc107"
+        else:
+            bg_color = "linear-gradient(135deg, #f8d7da, #f5c6cb)"
+            border_color = "#dc3545"
+        
+        # Rank indicator
+        rank = idx + 1
+        rank_emoji = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
+        
+        grid_html += f"""
+        <div style="background: {bg_color}; border: 2px solid {border_color}; border-radius: 10px; padding: 15px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <div style="font-size: 1.5rem; font-weight: bold;">{rank_emoji}</div>
+                <div style="font-size: 1.8rem; font-weight: bold; color: #2c3e50;">{conversion_rate}%</div>
+            </div>
+            <div style="font-weight: bold; font-size: 1.1rem; margin-bottom: 5px;">{owner_name[:20]}{'...' if len(owner_name) > 20 else ''}</div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.9rem; color: #666;">
+                <div>📊 {total_leads:,} leads</div>
+                <div>💰 {customers} customers</div>
+            </div>
+            <div style="margin-top: 10px; height: 8px; background: #e9ecef; border-radius: 4px; overflow: hidden;">
+                <div style="width: {min(conversion_rate, 100)}%; height: 100%; background: {border_color};"></div>
+            </div>
+        </div>
+        """
+    
+    grid_html += "</div>"
+    return grid_html
+
+# ✅ CRITICAL FIX: Fetch Deal Pipeline Stages to get correct Stage IDs
+@st.cache_data(ttl=86400)
+def fetch_deal_pipeline_stages(api_key):
+    """Fetch deal pipeline stages to get correct stage IDs (not labels)."""
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
-    # Convert dates to milliseconds for HubSpot filter
-    start_timestamp = int(start_date.timestamp() * 1000)
-    end_timestamp = int(end_date.timestamp() * 1000)
+    url = f"{HUBSPOT_API_BASE}/crm/v3/pipelines/deals"
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            pipelines = data.get("results", [])
+            
+            if not pipelines:
+                st.error("❌ No deal pipelines found in HubSpot")
+                return {}
+            
+            all_stages = {}
+            
+            for pipeline in pipelines:
+                pipeline_id = pipeline.get("id", "")
+                pipeline_label = pipeline.get("label", "")
+                stages = pipeline.get("stages", [])
+                
+                for stage in stages:
+                    stage_id = stage.get("id", "")
+                    stage_label = stage.get("label", "")
+                    stage_metadata = stage.get("metadata", {})
+                    probability = stage_metadata.get("probability", "0")
+                    
+                    all_stages[stage_id] = {
+                        "stage_id": stage_id,
+                        "stage_label": stage_label,
+                        "pipeline_id": pipeline_id,
+                        "pipeline_label": pipeline_label,
+                        "probability": probability,
+                        "full_info": f"{stage_label} (ID: {stage_id}, Probability: {probability})"
+                    }
+            
+            st.success(f"✅ Loaded {len(all_stages)} deal stages from {len(pipelines)} pipelines")
+            return all_stages
+            
+        elif response.status_code == 403:
+            st.error("""
+            ❌ Missing required scope: crm.pipelines.read
+            Please update your API key permissions to include:
+            - crm.objects.deals.read
+            - crm.objects.contacts.read  
+            - crm.pipelines.read
+            """)
+            return {}
+        else:
+            st.error(f"❌ Failed to fetch deal pipelines: {response.status_code}")
+            return {}
+            
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Error fetching deal pipelines: {e}")
+        return {}
+
+# ✅ Auto-detect Admission Confirmed stage ID
+def detect_admission_confirmed_stage(all_stages):
+    """Auto-detect Admission Confirmed stage from pipeline stages."""
+    target_labels = [
+        "admission confirmed",
+        "admission_confirmed", 
+        "confirmed",
+        "closed won",
+        "closedwon",
+        "won",
+        "customer"
+    ]
+    
+    detected_stages = []
+    
+    for stage_id, stage_info in all_stages.items():
+        stage_label = stage_info.get("stage_label", "").lower()
+        probability = stage_info.get("probability", "0")
+        
+        for target in target_labels:
+            if target in stage_label:
+                try:
+                    prob_float = float(probability)
+                    if prob_float >= 0.9:
+                        detected_stages.append({
+                            "stage_id": stage_id,
+                            "stage_label": stage_info.get("stage_label"),
+                            "probability": probability,
+                            "pipeline": stage_info.get("pipeline_label"),
+                            "match_reason": f"Label contains '{target}', probability: {probability}"
+                        })
+                        break
+                except:
+                    detected_stages.append({
+                        "stage_id": stage_id,
+                        "stage_label": stage_info.get("stage_label"),
+                        "probability": probability,
+                        "pipeline": stage_info.get("pipeline_label"),
+                        "match_reason": f"Label contains '{target}'"
+                    })
+                    break
+    
+    return detected_stages
+
+# ✅ CRITICAL FIX: UPDATED normalize_lead_status function
+def normalize_lead_status(raw_status):
+    """
+    Normalize lead status - ABSOLUTELY NO CUSTOMER HERE!
+    This function MUST NEVER return "Customer" for any lead status.
+    """
+    if not raw_status:
+        return "Unknown"
+    
+    status = str(raw_status).strip().lower()
+    
+    # ✅ FIRST: Check if this contains any customer keywords - BLOCK THEM!
+    for keyword in CUSTOMER_KEYWORDS_BLOCKLIST:
+        if keyword in status:
+            # This is PROBABLY a customer deal stage that leaked into contacts
+            # Map to "Qualified Lead" instead of "Customer"
+            if "hot" in status:
+                return "Hot"
+            elif "warm" in status:
+                return "Warm"
+            elif "cold" in status:
+                return "Cold"
+            else:
+                return "Qualified Lead"  # NOT Customer!
+    
+    # Now handle normal lead statuses
+    if "prospect" in status:
+        if "hot" in status:
+            return "Hot"
+        elif "warm" in status:
+            return "Warm"
+        elif "neutral" in status or "cold" in status:
+            return "Cold"
+        else:
+            return "Warm"
+    
+    if "not_connect" in status or "nc" in status.lower():
+        return "Not Connected (NC)"
+    
+    if "not_interest" in status:
+        return "Not Interested"
+    
+    if "not_qualif" in status or "unqualif" in status:
+        return "Not Qualified"
+    
+    if "duplicate" in status or "junk" in status:
+        return "Duplicate"
+    
+    if "new" in status or "open" in status:
+        return "New Lead"
+    
+    if status in LEAD_STATUS_MAP:
+        return LEAD_STATUS_MAP[status]
+    
+    # If we get here and it's still a customer-like term, map to Qualified Lead
+    if any(keyword in status for keyword in ["deal", "qualified", "converted"]):
+        return "Qualified Lead"
+    
+    return status.replace("_", " ").title()
+
+# ✅ CRITICAL FIX: Debug function to see what's being converted to "Customer"
+def debug_lead_status_conversion(df):
+    """Debug function to identify what's being incorrectly marked as Customer."""
+    if df.empty:
+        return
+    
+    # Find all rows where Lead Status is "Customer"
+    customer_rows = df[df['Lead Status'] == 'Customer']
+    
+    if not customer_rows.empty:
+        st.error(f"❌ FOUND {len(customer_rows)} ROWS MARKED AS 'CUSTOMER' IN LEADS!")
+        st.write("This should be ZERO. Showing samples:")
+        
+        # Show raw values that got converted to Customer
+        st.write("**Raw Lead Status values that became 'Customer':**")
+        unique_raw_values = customer_rows['Lead Status Raw'].dropna().unique()
+        
+        for raw_val in unique_raw_values[:10]:  # Show first 10
+            st.write(f"- `{raw_val}` → Customer")
+        
+        if len(unique_raw_values) > 10:
+            st.write(f"... and {len(unique_raw_values) - 10} more")
+        
+        # Show sample rows
+        st.write("**Sample rows with issue:**")
+        st.dataframe(customer_rows[['Full Name', 'Lead Status', 'Lead Status Raw', 'Course/Program']].head(10))
+        
+        # Let user manually fix these
+        st.markdown("""
+        <div class="data-fix-card">
+        <strong>🔧 QUICK FIX OPTION:</strong><br>
+        You can manually remap these incorrect "Customer" entries:
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Provide a quick fix option
+        if st.button("🔄 Auto-fix 'Customer' in leads (map to 'Qualified Lead')"):
+            # Fix the dataframe
+            df_fixed = df.copy()
+            df_fixed['Lead Status'] = df_fixed['Lead Status'].replace('Customer', 'Qualified Lead')
+            
+            # Update session state
+            st.session_state.contacts_df = df_fixed
+            st.success("✅ Fixed! 'Customer' entries in leads now mapped to 'Qualified Lead'")
+            st.rerun()
+
+def validate_api_key(api_key):
+    """Validate the HubSpot API key format."""
+    if not api_key:
+        return False, "❌ API key is empty"
+    
+    if not api_key.startswith("pat-"):
+        return False, "❌ Invalid API key format. Should start with 'pat-'"
+    
+    if len(api_key) < 20:
+        return False, "❌ API key appears too short"
+    
+    return True, "✅ API key format looks valid"
+
+def test_hubspot_connection(api_key):
+    """Test if the HubSpot API key is valid."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    url = f"{HUBSPOT_API_BASE}/crm/v3/objects/contacts?limit=1"
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            return True, "✅ Connection successful! API key is valid."
+        elif response.status_code == 401:
+            error_data = response.json()
+            error_message = error_data.get('message', 'Unknown error')
+            
+            if "Invalid token" in error_message or "expired" in error_message:
+                return False, "❌ API key is invalid or expired. Please check your API key."
+            elif "scope" in error_message.lower():
+                return False, f"❌ Missing required scopes. Error: {error_message}"
+            else:
+                return False, f"❌ Authentication failed. Status: {response.status_code}"
+        else:
+            return False, f"❌ Connection failed. Status: {response.status_code}"
+    except requests.exceptions.RequestException as e:
+        return False, f"❌ Connection error: {str(e)}"
+
+@st.cache_data(ttl=3600)
+def fetch_owner_mapping(api_key):
+    """Fetch ALL owner ID to name mapping with pagination."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    url = f"{HUBSPOT_API_BASE}/crm/v3/owners"
+    params = {"limit": 100}
+    mapping = {}
+    page_count = 0
+    total_owners = 0
+
+    try:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        while True:
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response.raise_for_status()
+
+            data = response.json()
+            owners = data.get("results", [])
+            
+            for owner in owners:
+                owner_id = str(owner.get("id", ""))
+
+                first_name = owner.get("firstName", "")
+                last_name = owner.get("lastName", "")
+                email = owner.get("email", "")
+
+                name = f"{first_name} {last_name}".strip() if first_name or last_name else email.split("@")[0] if email else f"Owner {owner_id}"
+                mapping[owner_id] = name
+
+            page_count += 1
+            total_owners += len(owners)
+            
+            if page_count <= 5:
+                progress_bar.progress(min(page_count / 5, 0.9))
+            status_text.text(f"📋 Fetched {total_owners} owners (page {page_count})...")
+
+            paging = data.get("paging", {})
+            next_link = paging.get("next", {}).get("link")
+
+            if not next_link:
+                progress_bar.progress(1.0)
+                status_text.text(f"✅ Owner mapping complete! Total: {total_owners} owners")
+                break
+
+            url = next_link
+            params = None
+            time.sleep(0.1)
+            
+    except requests.exceptions.RequestException as e:
+        st.warning(f"⚠️ Partial owner mapping loaded. Error: {str(e)[:100]}")
+    except Exception as e:
+        st.warning(f"⚠️ Could not fetch owner mapping: {str(e)[:100]}")
+
+    return mapping
+
+def date_to_hubspot_timestamp(date_obj, is_end_date=False):
+    """Convert date to HubSpot timestamp (milliseconds)."""
+    if isinstance(date_obj, str):
+        date_obj = datetime.strptime(date_obj, "%Y-%m-%d").date()
+    
+    if is_end_date:
+        dt = datetime.combine(date_obj, datetime.max.time())
+    else:
+        dt = datetime.combine(date_obj, datetime.min.time())
+    
+    dt_ist = IST.localize(dt)
+    dt_utc = dt_ist.astimezone(pytz.UTC)
+    return int(dt_utc.timestamp() * 1000)
+
+def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end_date):
+    """Fetch ALL contacts from HubSpot with server-side date filtering."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    start_timestamp = date_to_hubspot_timestamp(start_date, is_end_date=False)
+    safe_end_date = end_date + timedelta(days=1)
+    end_timestamp = date_to_hubspot_timestamp(safe_end_date, is_end_date=False)
+    
+    all_contacts = []
+    after = None
+    
+    # Build filter
+    if date_field == "Created Date":
+        filter_groups = [{
+            "filters": [
+                {"propertyName": "createdate", "operator": "GTE", "value": start_timestamp},
+                {"propertyName": "createdate", "operator": "LTE", "value": end_timestamp}
+            ]
+        }]
+    elif date_field == "Last Modified Date":
+        filter_groups = [{
+            "filters": [
+                {"propertyName": "lastmodifieddate", "operator": "GTE", "value": start_timestamp},
+                {"propertyName": "lastmodifieddate", "operator": "LTE", "value": end_timestamp}
+            ]
+        }]
+    else:
+        filter_groups = [
+            {
+                "filters": [
+                    {"propertyName": "createdate", "operator": "GTE", "value": start_timestamp},
+                    {"propertyName": "createdate", "operator": "LTE", "value": end_timestamp}
+                ]
+            },
+            {
+                "filters": [
+                    {"propertyName": "lastmodifieddate", "operator": "GTE", "value": start_timestamp},
+                    {"propertyName": "lastmodifieddate", "operator": "LTE", "value": end_timestamp}
+                ]
+            }
+        ]
+    
+    url = f"{HUBSPOT_API_BASE}/crm/v3/objects/contacts/search"
+    
+    # Define properties - REMOVE lifecycle stage
+    all_properties = [
+        "hs_lead_status", "lead_status", 
+        "hubspot_owner_id", "hs_assigned_owner_id",
+        "course", "program", "product", "service", "offering",
+        "course_name", "program_name", "product_name",
+        "enquired_course", "interested_course", "course_interested",
+        "program_of_interest", "course_of_interest", "product_of_interest",
+        "firstname", "lastname", "email", "phone", 
+        "createdate", "lastmodifieddate", "hs_object_id",
+        "company", "jobtitle", "country"
+    ]
+    
+    try:
+        while True:
+            body = {
+                "filterGroups": filter_groups,
+                "properties": all_properties,
+                "associations": ["owners"],
+                "limit": 100,
+                "sorts": [{
+                    "propertyName": "createdate" if date_field == "Created Date" else "lastmodifieddate",
+                    "direction": "ASCENDING"
+                }]
+            }
+            
+            if after:
+                body["after"] = after
+            
+            response = requests.post(url, headers=headers, json=body, timeout=30)
+            
+            if response.status_code == 429:
+                time.sleep(10)
+                continue
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            batch_contacts = data.get("results", [])
+            
+            if batch_contacts:
+                all_contacts.extend(batch_contacts)
+                paging_info = data.get("paging", {})
+                after = paging_info.get("next", {}).get("after")
+                
+                if not after:
+                    break
+                
+                time.sleep(0.1)
+            else:
+                break
+        
+        return all_contacts, len(all_contacts)
+        
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Error fetching contacts: {e}")
+        return [], 0
+    except Exception as e:
+        st.error(f"❌ Unexpected error: {e}")
+        return [], 0
+
+# ✅ MODIFIED: Fetch DEALS with partial payment properties
+def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
+    """Fetch DEALS from HubSpot using CORRECT stage IDs (not labels)."""
+    if not customer_stage_ids:
+        st.error("❌ No customer stage IDs configured.")
+        return [], 0
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    start_timestamp = date_to_hubspot_timestamp(start_date, is_end_date=False)
+    end_timestamp = date_to_hubspot_timestamp(end_date, is_end_date=True)
     
     all_deals = []
     after = None
-    has_more = True
     
-    # Define all properties needed
+    url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals/search"
+    
+    # ✅ CORRECT FILTER: Use Stage IDs
+    filter_groups = [{
+        "filters": [
+            {
+                "propertyName": "dealstage",
+                "operator": "IN",
+                "values": customer_stage_ids
+            },
+            {
+                "propertyName": "closedate",
+                "operator": "GTE",
+                "value": start_timestamp
+            },
+            {
+                "propertyName": "closedate",
+                "operator": "LTE", 
+                "value": end_timestamp
+            }
+        ]
+    }]
+    
+    # ✅ ADDED: Partial payment properties
     deal_properties = [
         "dealname",
         "dealstage",
@@ -107,7 +1501,14 @@ def fetch_hubspot_deals(start_date: datetime, end_date: datetime, token: str) ->
         "hubspot_owner_id",
         "closedate",
         "createdate",
-        # Partial payment properties
+        "course",
+        "program",
+        "product",
+        "service",
+        "offering",
+        "course_name",
+        "program_name",
+        # ✅ ADD THESE partial payment properties
         "partial_amount",
         "partial_payment_amount",
         "offline_payment_amount",
@@ -115,74 +1516,194 @@ def fetch_hubspot_deals(start_date: datetime, end_date: datetime, token: str) ->
         "partial_payment_date",
         "offline_payment_date",
         "online_payment_date",
-        "course",
-        "program"
     ]
     
-    while has_more:
-        params = {
-            "limit": 100,
-            "properties": deal_properties,
-            "archived": "false"
-        }
-        
-        if after:
-            params["after"] = after
+    try:
+        while True:
+            body = {
+                "filterGroups": filter_groups,
+                "properties": deal_properties,
+                "associations": ["owners"],
+                "limit": 100,
+                "sorts": [{"propertyName": "closedate", "direction": "DESCENDING"}]
+            }
             
-        # Try to get deals created or closed in date range
-        filter_groups = [{
-            "filters": [
-                {
-                    "propertyName": "createdate",
-                    "operator": "BETWEEN",
-                    "highValue": str(end_timestamp),
-                    "value": str(start_timestamp)
-                },
-                {
-                    "propertyName": "closedate",
-                    "operator": "BETWEEN",
-                    "highValue": str(end_timestamp),
-                    "value": str(start_timestamp)
-                }
-            ]
-        }]
-        
-        params["filterGroups"] = filter_groups
-        
-        try:
-            response = requests.post(
-                f"{HUBSPOT_BASE_URL}/crm/v3/objects/deals/search",
-                headers=headers,
-                json=params
-            )
+            if after:
+                body["after"] = after
             
-            if response.status_code == 200:
-                data = response.json()
-                all_deals.extend(data.get("results", []))
+            response = requests.post(url, headers=headers, json=body, timeout=30)
+            
+            if response.status_code == 429:
+                time.sleep(10)
+                continue
+            
+            if response.status_code == 401:
+                st.error("❌ Error 401: Unauthorized - Invalid API key or token expired")
+                return [], 0
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            batch_deals = data.get("results", [])
+            
+            if batch_deals:
+                all_deals.extend(batch_deals)
+                paging_info = data.get("paging", {})
+                after = paging_info.get("next", {}).get("after")
                 
-                paging = data.get("paging", {})
-                if "next" in paging:
-                    after = paging["next"]["after"]
-                else:
-                    has_more = False
+                if not after:
+                    break
+                
+                time.sleep(0.1)
             else:
-                st.error(f"Error fetching deals: {response.status_code}")
-                has_more = False
-                
-        except Exception as e:
-            st.error(f"Exception fetching deals: {str(e)}")
-            has_more = False
-    
-    return all_deals
+                break
+        
+        return all_deals, len(all_deals)
+        
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Error fetching deals: {e}")
+        return [], 0
+    except Exception as e:
+        st.error(f"❌ Unexpected error fetching deals: {e}")
+        return [], 0
 
-def process_deals_as_customers(deals_data: List[Dict], start_date: datetime.date, end_date: datetime.date) -> pd.DataFrame:
-    """Process deals data into customer format with corrected revenue calculation."""
-    customers = []
+def process_contacts_data(contacts, owner_mapping=None, api_key=None):
+    """Process raw contacts data into a clean DataFrame - ABSOLUTELY NO CUSTOMER HERE."""
+    if not contacts:
+        return pd.DataFrame()
     
-    for deal in deals_data:
+    processed_data = []
+    
+    for contact in contacts:
+        properties = contact.get("properties", {})
+        
+        # Extract course information
+        course_info = ""
+        course_fields = [
+            "course", "program", "product", "service", "offering",
+            "course_name", "program_name", "product_name",
+            "enquired_course", "interested_course", "course_interested",
+            "program_of_interest", "course_of_interest", "product_of_interest"
+        ]
+        
+        for field in course_fields:
+            if field in properties and properties[field] and str(properties[field]).strip():
+                course_info = properties[field]
+                break
+        
+        # Owner ID extraction
+        owner_id = (
+            properties.get("hubspot_owner_id")
+            or properties.get("hs_assigned_owner_id")
+            or ""
+        )
+        
+        if not owner_id:
+            associations = contact.get("associations", {})
+            owners = associations.get("owners", {}).get("results", [])
+            if owners:
+                owner_id = str(owners[0].get("id", ""))
+        
+        owner_id = str(owner_id)
+        
+        # Map owner ID to name
+        owner_name = ""
+        if owner_mapping:
+            if owner_id in owner_mapping:
+                owner_name = owner_mapping[owner_id]
+            else:
+                owner_name = f"❌ Unassigned ({owner_id})" if owner_id else "❌ Unassigned"
+        else:
+            owner_name = owner_id
+        
+        # ✅ CRITICAL: Get raw lead status
+        raw_lead_status = properties.get("hs_lead_status", "") or properties.get("lead_status", "")
+        
+        # ✅ CRITICAL: Normalize lead status - WILL NEVER RETURN "CUSTOMER"
+        lead_status = normalize_lead_status(raw_lead_status)
+        
+        # Create full name
+        full_name = f"{properties.get('firstname', '')} {properties.get('lastname', '')}".strip()
+        
+        processed_data.append({
+            "ID": contact.get("id", ""),
+            "Full Name": full_name,
+            "Email": properties.get("email", ""),
+            "Phone": properties.get("phone", ""),
+            "Company": properties.get("company", ""),
+            "Job Title": properties.get("jobtitle", ""),
+            "Country": properties.get("country", ""),
+            "Course/Program": course_info,
+            "Course Owner": owner_name,
+            "Lead Status": lead_status,  # ✅ NO CUSTOMER HERE
+            "Created Date": properties.get("createdate", ""),
+            "Lead Status Raw": raw_lead_status,
+            "Owner ID": owner_id
+        })
+    
+    df = pd.DataFrame(processed_data)
+    
+    # ✅ CRITICAL: Debug and fix any "Customer" entries
+    if not df.empty:
+        customer_count = (df['Lead Status'] == 'Customer').sum()
+        if customer_count > 0:
+            st.error(f"❌ ERROR: Found {customer_count} 'Customer' in leads after processing")
+            # Call debug function
+            debug_lead_status_conversion(df)
+    
+    return df
+
+# ✅ MODIFIED: Process deals with partial payment logic
+def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stages=None, start_date=None, end_date=None):
+    """Process raw deals data into customer DataFrame with partial payment correction."""
+    if not deals:
+        return pd.DataFrame()
+    
+    processed_data = []
+    stage_label_map = {}
+    
+    if all_stages:
+        stage_label_map = {stage_id: info.get("stage_label", stage_id) 
+                          for stage_id, info in all_stages.items()}
+    
+    for deal in deals:
         properties = deal.get("properties", {})
         
-        # Get deal amount and clean it
+        # Extract course information from deal
+        course_info = ""
+        course_fields = [
+            "course", "program", "product", "service", "offering",
+            "course_name", "program_name", "product_name"
+        ]
+        
+        for field in course_fields:
+            if field in properties and properties[field] and str(properties[field]).strip():
+                course_info = properties[field]
+                break
+        
+        # Owner ID extraction from deal
+        owner_id = properties.get("hubspot_owner_id", "")
+        
+        if not owner_id:
+            associations = deal.get("associations", {})
+            owners = associations.get("owners", {}).get("results", [])
+            if owners:
+                owner_id = str(owners[0].get("id", ""))
+        
+        owner_id = str(owner_id)
+        
+        # Map owner ID to name
+        owner_name = ""
+        if owner_mapping:
+            if owner_id in owner_mapping:
+                owner_name = owner_mapping[owner_id]
+            else:
+                owner_name = f"❌ Unassigned ({owner_id})" if owner_id else "❌ Unassigned"
+        else:
+            owner_name = owner_id
+        
+        # ✅ CORRECTED REVENUE LOGIC with partial payments
+        # Start with deal amount
         deal_amount = safe_float(properties.get("amount", 0))
         
         # Get partial payment amounts
@@ -195,376 +1716,1975 @@ def process_deals_as_customers(deals_data: List[Dict], start_date: datetime.date
         offline_date = properties.get("offline_payment_date")
         online_date = properties.get("online_payment_date")
         
-        # CORRECTED REVENUE LOGIC:
-        # Subtract only if payment date is OUTSIDE dashboard range
-        if is_outside_range(partial_date, start_date, end_date):
-            deal_amount -= partial_amount
+        # ✅ CORRECTED LOGIC: Subtract only if payment date is OUTSIDE dashboard range
+        if start_date and end_date:
+            if is_outside_range(partial_date, start_date, end_date):
+                deal_amount -= partial_amount
+            
+            if is_outside_range(offline_date, start_date, end_date):
+                deal_amount -= offline_amount
+            
+            if is_outside_range(online_date, start_date, end_date):
+                deal_amount -= online_amount
         
-        if is_outside_range(offline_date, start_date, end_date):
-            deal_amount -= offline_amount
-        
-        if is_outside_range(online_date, start_date, end_date):
-            deal_amount -= online_amount
-        
-        # Ensure deal amount is not negative
+        # Safety check - ensure amount is not negative
         deal_amount = max(deal_amount, 0)
         
-        # Get other properties
-        deal_stage = properties.get("dealstage", "Unknown")
-        course = properties.get("course", "Not specified")
-        program = properties.get("program", "Not specified")
-        
-        # Determine customer status based on deal stage
-        if deal_stage in ["closedwon", "closedwon不用谢", "contractsent", "63020224"]:
-            status = "Active"
-        elif deal_stage in ["closedlost", "closedlost不用谢"]:
-            status = "Inactive"
-        else:
-            status = "Pending"
-        
         # Get close date
-        close_date = properties.get("closedate")
-        if close_date:
-            try:
-                close_date = datetime.fromtimestamp(int(close_date) / 1000).strftime("%Y-%m-%d")
-            except:
-                close_date = "N/A"
-        else:
-            close_date = "N/A"
+        close_date = properties.get("closedate", "")
         
-        customers.append({
-            "Customer Name": properties.get("dealname", "Unknown"),
-            "Status": status,
-            "Amount": deal_amount,
-            "Course": course,
-            "Program": program,
-            "Close Date": close_date
+        # Get deal stage (ID)
+        deal_stage_id = properties.get("dealstage", "")
+        
+        # Convert stage ID to label if possible
+        deal_stage_label = stage_label_map.get(deal_stage_id, deal_stage_id)
+        
+        # Store partial payment info for debugging
+        partial_info = {
+            "partial_amount": partial_amount,
+            "offline_amount": offline_amount,
+            "online_amount": online_amount,
+            "partial_date": partial_date,
+            "offline_date": offline_date,
+            "online_date": online_date,
+            "original_amount": safe_float(properties.get("amount", 0))
+        }
+        
+        processed_data.append({
+            "Customer ID": deal.get("id", ""),
+            "Deal Name": properties.get("dealname", ""),
+            "Course/Program": course_info,
+            "Course Owner": owner_name,
+            "Amount": deal_amount,  # ✅ CORRECTED amount after partial payment adjustment
+            "Original Amount": safe_float(properties.get("amount", 0)),  # Original amount for reference
+            "Partial Adjustments": json.dumps(partial_info),  # Store as JSON string
+            "Close Date": close_date,
+            "Deal Stage ID": deal_stage_id,
+            "Deal Stage Label": deal_stage_label,
+            "Is Customer": 1  # ✅ ALL these deals are customers
         })
     
-    return pd.DataFrame(customers)
+    df = pd.DataFrame(processed_data)
+    
+    return df
 
-def calculate_kpis(df: pd.DataFrame, previous_df: Optional[pd.DataFrame] = None) -> Dict:
-    """Calculate KPIs from customer data."""
-    kpis = {}
+def create_metric_1(df):
+    """METRIC 1: Course × Lead Status - NO CUSTOMER"""
+    if df.empty or 'Course/Program' not in df.columns:
+        return pd.DataFrame()
     
-    # Total Revenue (CORRECTED - excludes partial payments outside date range)
-    total_revenue = df["Amount"].sum()
-    kpis["Total Revenue"] = total_revenue
+    df_course = df[df['Course/Program'].notna() & (df['Course/Program'] != '')].copy()
     
-    # Customer Counts
-    active_customers = df[df["Status"] == "Active"].shape[0]
-    inactive_customers = df[df["Status"] == "Inactive"].shape[0]
-    pending_customers = df[df["Status"] == "Pending"].shape[0]
-    total_customers = df.shape[0]
+    if df_course.empty:
+        return pd.DataFrame()
     
-    kpis["Active Customers"] = active_customers
-    kpis["Inactive Customers"] = inactive_customers
-    kpis["Pending Customers"] = pending_customers
-    kpis["Total Customers"] = total_customers
+    df_course['Course_Clean'] = df_course['Course/Program'].str.strip()
     
-    # Average Revenue Per Customer
-    avg_revenue = total_revenue / total_customers if total_customers > 0 else 0
-    kpis["Avg Revenue/Customer"] = avg_revenue
+    pivot = pd.pivot_table(
+        df_course,
+        index='Course_Clean',
+        columns='Lead Status',
+        values='ID',
+        aggfunc='count',
+        fill_value=0
+    )
     
-    # Course-wise revenue
-    course_revenue = df.groupby("Course")["Amount"].sum().sort_values(ascending=False)
-    kpis["Course Revenue"] = course_revenue
+    pivot = pivot.reset_index().rename(columns={'Course_Clean': 'Course'})
     
-    # Program-wise revenue
-    program_revenue = df.groupby("Program")["Amount"].sum().sort_values(ascending=False)
-    kpis["Program Revenue"] = program_revenue
+    if len(pivot.columns) > 1:
+        status_cols = [col for col in pivot.columns if col != 'Course']
+        pivot['Total'] = pivot[status_cols].sum(axis=1)
     
-    # Calculate changes if previous data is provided
-    if previous_df is not None:
-        prev_total_revenue = previous_df["Amount"].sum()
-        prev_total_customers = previous_df.shape[0]
-        
-        revenue_change = ((total_revenue - prev_total_revenue) / prev_total_revenue * 100) if prev_total_revenue > 0 else 0
-        customer_change = ((total_customers - prev_total_customers) / prev_total_customers * 100) if prev_total_customers > 0 else 0
-        
-        kpis["Revenue Change %"] = revenue_change
-        kpis["Customer Change %"] = customer_change
-    
-    return kpis
+    return pivot
 
-def display_kpi_card(title: str, value, change: Optional[float] = None, prefix: str = "$", is_percent: bool = False):
-    """Display a KPI card with optional change indicator."""
-    col1, col2 = st.columns([3, 1])
+def create_metric_2(df):
+    """METRIC 2: Course Owner × Lead Status - NO CUSTOMER"""
+    if df.empty or 'Course Owner' not in df.columns:
+        return pd.DataFrame()
     
-    with col1:
-        st.markdown(f'<div class="kpi-title">{title}</div>', unsafe_allow_html=True)
+    df_owner = df[df['Course Owner'].notna() & (df['Course Owner'] != '')].copy()
+    
+    if df_owner.empty:
+        return pd.DataFrame()
+    
+    pivot = pd.pivot_table(
+        df_owner,
+        index='Course Owner',
+        columns='Lead Status',
+        values='ID',
+        aggfunc='count',
+        fill_value=0
+    )
+    
+    pivot = pivot.reset_index()
+    
+    if len(pivot.columns) > 1:
+        status_cols = [col for col in pivot.columns if col != 'Course Owner']
+        pivot['Total'] = pivot[status_cols].sum(axis=1)
+    
+    return pivot
+
+def create_metric_4(df_contacts, df_customers):
+    """METRIC 4: Course Owner Performance SUMMARY"""
+    if df_contacts.empty or 'Course Owner' not in df_contacts.columns:
+        return pd.DataFrame()
+    
+    owner_lead_pivot = create_metric_2(df_contacts)
+    
+    if owner_lead_pivot.empty:
+        return pd.DataFrame()
+    
+    # Get customer data from deals
+    if df_customers is not None and not df_customers.empty and 'Course Owner' in df_customers.columns:
+        customer_by_owner = df_customers.groupby('Course Owner').agg(
+            Customer_Count=('Is Customer', 'sum'),
+            Customer_Revenue=('Amount', 'sum')
+        ).reset_index()
+    else:
+        customer_by_owner = pd.DataFrame(columns=['Course Owner', 'Customer_Count', 'Customer_Revenue'])
+    
+    # Merge lead data with customer data
+    result_df = owner_lead_pivot.copy()
+    result_df['Customer'] = 0
+    
+    if not customer_by_owner.empty:
+        result_df = pd.merge(result_df, customer_by_owner, on='Course Owner', how='left')
+        result_df['Customer_Count'] = result_df['Customer_Count'].fillna(0)
+        result_df['Customer_Revenue'] = result_df['Customer_Revenue'].fillna(0)
+        result_df['Customer'] = result_df['Customer_Count']
+    else:
+        result_df['Customer_Count'] = 0
+        result_df['Customer_Revenue'] = 0
+    
+    # Deal Leads = Hot + Warm + Cold + Customer
+    deal_statuses = ['Cold', 'Warm', 'Hot']
+    result_df['Deal Leads'] = 0
+    
+    for status in deal_statuses:
+        if status in result_df.columns:
+            result_df['Deal Leads'] += result_df[status].fillna(0)
+    
+    result_df['Deal Leads'] += result_df['Customer']
+    
+    # Calculate percentages
+    if 'Total' in result_df.columns:
+        result_df = result_df.rename(columns={'Total': 'Grand Total'})
+        result_df['Deal %'] = np.where(
+            result_df['Grand Total'] > 0,
+            (result_df['Deal Leads'] / result_df['Grand Total'] * 100).round(2),
+            0
+        )
+    else:
+        result_df['Deal %'] = 0
+    
+    result_df['Customer %'] = np.where(
+        result_df['Deal Leads'] > 0,
+        (result_df['Customer'] / result_df['Deal Leads'] * 100).round(2),
+        0
+    )
+    
+    if 'Grand Total' in result_df.columns:
+        result_df['Lead→Customer %'] = np.where(
+            result_df['Grand Total'] > 0,
+            (result_df['Customer'] / result_df['Grand Total'] * 100).round(2),
+            0
+        )
+        result_df['Lead→Deal %'] = np.where(
+            result_df['Grand Total'] > 0,
+            (result_df['Deal Leads'] / result_df['Grand Total'] * 100).round(2),
+            0
+        )
+    else:
+        result_df['Lead→Customer %'] = 0
+        result_df['Lead→Deal %'] = 0
+    
+    # Select columns
+    base_cols = ['Course Owner']
+    status_cols = ['Cold', 'Hot', 'Warm']
+    existing_status_cols = [col for col in status_cols if col in result_df.columns]
+    
+    final_cols = base_cols + existing_status_cols + [
+        'Customer', 
+        'Customer_Revenue',
+        'Deal Leads', 
+        'Deal %', 
+        'Customer %',
+        'Lead→Customer %',
+        'Lead→Deal %',
+        'Grand Total'
+    ]
+    
+    final_df = result_df[final_cols].copy()
+    
+    if 'Grand Total' in final_df.columns:
+        final_df = final_df.sort_values('Grand Total', ascending=False)
+    
+    return final_df
+
+# ✅ NEW: METRIC 5 - Course Performance KPI Table (Same as Owner Performance but for Courses)
+def create_metric_5(df_contacts, df_customers):
+    """METRIC 5: Course Performance KPI Table"""
+    if df_contacts.empty or 'Course/Program' not in df_contacts.columns:
+        return pd.DataFrame()
+    
+    course_lead_pivot = create_metric_1(df_contacts)
+    
+    if course_lead_pivot.empty:
+        return pd.DataFrame()
+    
+    # Get customer data from deals by course
+    if df_customers is not None and not df_customers.empty and 'Course/Program' in df_customers.columns:
+        customer_by_course = df_customers.groupby('Course/Program').agg(
+            Customer_Count=('Is Customer', 'sum'),
+            Customer_Revenue=('Amount', 'sum')
+        ).reset_index()
+    else:
+        customer_by_course = pd.DataFrame(columns=['Course/Program', 'Customer_Count', 'Customer_Revenue'])
+    
+    # Merge lead data with customer data
+    result_df = course_lead_pivot.copy()
+    result_df = result_df.rename(columns={'Course': 'Course'})
+    result_df['Customer'] = 0
+    
+    if not customer_by_course.empty:
+        result_df = pd.merge(result_df, customer_by_course, left_on='Course', right_on='Course/Program', how='left')
+        result_df['Customer_Count'] = result_df['Customer_Count'].fillna(0)
+        result_df['Customer_Revenue'] = result_df['Customer_Revenue'].fillna(0)
+        result_df['Customer'] = result_df['Customer_Count']
+        # Drop the extra course column from merge
+        result_df = result_df.drop(columns=['Course/Program'], errors='ignore')
+    else:
+        result_df['Customer_Count'] = 0
+        result_df['Customer_Revenue'] = 0
+    
+    # Deal Leads = Hot + Warm + Cold + Customer
+    deal_statuses = ['Cold', 'Warm', 'Hot']
+    result_df['Deal Leads'] = 0
+    
+    for status in deal_statuses:
+        if status in result_df.columns:
+            result_df['Deal Leads'] += result_df[status].fillna(0)
+    
+    result_df['Deal Leads'] += result_df['Customer']
+    
+    # Calculate percentages
+    if 'Total' in result_df.columns:
+        result_df = result_df.rename(columns={'Total': 'Grand Total'})
+        result_df['Deal %'] = np.where(
+            result_df['Grand Total'] > 0,
+            (result_df['Deal Leads'] / result_df['Grand Total'] * 100).round(2),
+            0
+        )
+    else:
+        result_df['Deal %'] = 0
+    
+    result_df['Customer %'] = np.where(
+        result_df['Deal Leads'] > 0,
+        (result_df['Customer'] / result_df['Deal Leads'] * 100).round(2),
+        0
+    )
+    
+    if 'Grand Total' in result_df.columns:
+        result_df['Lead→Customer %'] = np.where(
+            result_df['Grand Total'] > 0,
+            (result_df['Customer'] / result_df['Grand Total'] * 100).round(2),
+            0
+        )
+        result_df['Lead→Deal %'] = np.where(
+            result_df['Grand Total'] > 0,
+            (result_df['Deal Leads'] / result_df['Grand Total'] * 100).round(2),
+            0
+        )
+    else:
+        result_df['Lead→Customer %'] = 0
+        result_df['Lead→Deal %'] = 0
+    
+    # Select columns
+    base_cols = ['Course']
+    status_cols = ['Cold', 'Hot', 'Warm']
+    existing_status_cols = [col for col in status_cols if col in result_df.columns]
+    
+    final_cols = base_cols + existing_status_cols + [
+        'Customer', 
+        'Customer_Revenue',
+        'Deal Leads', 
+        'Deal %', 
+        'Customer %',
+        'Lead→Customer %',
+        'Lead→Deal %',
+        'Grand Total'
+    ]
+    
+    final_df = result_df[final_cols].copy()
+    
+    if 'Grand Total' in final_df.columns:
+        final_df = final_df.sort_values('Grand Total', ascending=False)
+    
+    return final_df
+
+# ✅ NEW: Course Revenue Analysis
+def create_course_revenue(df_customers):
+    """Calculate revenue by course from customer data."""
+    if df_customers is None or df_customers.empty or 'Course/Program' not in df_customers.columns or 'Amount' not in df_customers.columns:
+        return pd.DataFrame()
+    
+    # Filter only courses with revenue
+    customer_df = df_customers[(df_customers['Course/Program'].notna()) & (df_customers['Course/Program'] != '')].copy()
+    
+    if customer_df.empty:
+        return pd.DataFrame()
+    
+    # Clean course names
+    customer_df['Course_Clean'] = customer_df['Course/Program'].str.strip()
+    
+    # Group by course
+    revenue_df = customer_df.groupby('Course_Clean').agg(
+        Customers=('Is Customer', 'sum'),
+        Revenue=('Amount', 'sum'),
+        Original_Revenue=('Original Amount', 'sum')
+    ).reset_index().rename(columns={'Course_Clean': 'Course'})
+    
+    # Calculate adjustments
+    revenue_df['Adjustment'] = revenue_df['Original_Revenue'] - revenue_df['Revenue']
+    revenue_df['Adjustment_Pct'] = np.where(
+        revenue_df['Original_Revenue'] > 0,
+        (revenue_df['Adjustment'] / revenue_df['Original_Revenue'] * 100).round(2),
+        0
+    )
+    
+    # Calculate revenue per customer
+    revenue_df['Revenue per Customer'] = np.where(
+        revenue_df['Customers'] > 0,
+        (revenue_df['Revenue'] / revenue_df['Customers']).round(0),
+        0
+    )
+    
+    # Sort by revenue
+    revenue_df = revenue_df.sort_values('Revenue', ascending=False)
+    
+    return revenue_df
+
+# ✅ NEW: Volume vs Conversion Matrix
+def create_volume_conversion_matrix(metric_1, df_contacts, df_customers):
+    """Create a 2x2 matrix to classify courses based on volume and conversion."""
+    if metric_1.empty or 'Total' not in metric_1.columns:
+        return pd.DataFrame()
+    
+    # Get customer data by course
+    customer_by_course = {}
+    if df_customers is not None and not df_customers.empty and 'Course/Program' in df_customers.columns:
+        for _, row in df_customers.iterrows():
+            course = row['Course/Program']
+            if pd.notna(course) and course != '':
+                course_clean = str(course).strip()
+                customer_by_course[course_clean] = customer_by_course.get(course_clean, 0) + 1
+    
+    # Calculate conversion % for each course
+    matrix_data = []
+    
+    for _, row in metric_1.iterrows():
+        course = row['Course']
+        total = row.get('Total', 0)
         
-        if is_percent:
-            formatted_value = f"{value:.1f}%"
-        elif prefix == "$":
-            formatted_value = f"{prefix}{value:,.0f}"
+        # Get customer count for this course
+        customer_count = customer_by_course.get(course, 0)
+        
+        # Calculate conversion %
+        conversion_pct = (customer_count / total * 100) if total > 0 else 0
+        
+        matrix_data.append({
+            'Course': course,
+            'Volume': total,
+            'Conversion %': round(conversion_pct, 1),
+            'Customer Count': customer_count
+        })
+    
+    matrix_df = pd.DataFrame(matrix_data)
+    
+    if len(matrix_df) < 2:
+        return matrix_df
+    
+    # Calculate thresholds (median)
+    volume_threshold = matrix_df['Volume'].median()
+    conversion_threshold = matrix_df['Conversion %'].median()
+    
+    # Classify each course
+    def classify_course(row):
+        if row['Volume'] >= volume_threshold and row['Conversion %'] >= conversion_threshold:
+            return "⭐ Star"
+        elif row['Volume'] < volume_threshold and row['Conversion %'] >= conversion_threshold:
+            return "📈 Potential"
+        elif row['Volume'] >= volume_threshold and row['Conversion %'] < conversion_threshold:
+            return "⚠️ Burn (High Volume, Low Conversion)"
         else:
-            formatted_value = f"{prefix}{value:,}"
-        
-        st.markdown(f'<div class="kpi-value">{formatted_value}</div>', unsafe_allow_html=True)
+            return "❌ Weak"
     
-    if change is not None:
-        with col2:
-            change_symbol = "↗️" if change > 0 else "↘️" if change < 0 else "➡️"
-            change_class = "positive" if change > 0 else "negative" if change < 0 else ""
-            change_text = f"{change:+.1f}%"
-            
-            st.markdown(
-                f'<div class="kpi-change {change_class}">{change_symbol} {change_text}</div>',
-                unsafe_allow_html=True
-            )
+    matrix_df['Segment'] = matrix_df.apply(classify_course, axis=1)
+    
+    return matrix_df
 
-# Main Dashboard
+def create_comparison_data(df_contacts, df_customers, comparison_type, item1, item2):
+    """Create comparison data for different comparison types."""
+    if df_contacts.empty:
+        return None
+    
+    results = {}
+    
+    if comparison_type == "Course vs Course":
+        # Get course data
+        metric_1 = create_metric_1(df_contacts)
+        if not metric_1.empty:
+            # Filter for selected courses
+            course1_data = metric_1[metric_1['Course'] == item1] if item1 in metric_1['Course'].values else pd.DataFrame()
+            course2_data = metric_1[metric_1['Course'] == item2] if item2 in metric_1['Course'].values else pd.DataFrame()
+            
+            results['type'] = 'course_vs_course'
+            results['item1'] = item1
+            results['item2'] = item2
+            results['data1'] = course1_data
+            results['data2'] = course2_data
+            
+            # Calculate comparison metrics
+            if not course1_data.empty and not course2_data.empty:
+                # Deal Leads (Cold + Warm + Hot)
+                deal_cols = ['Cold', 'Warm', 'Hot']
+                deal1 = course1_data[deal_cols].sum(axis=1).values[0] if all(col in course1_data.columns for col in deal_cols) else 0
+                total1 = course1_data['Total'].values[0] if 'Total' in course1_data.columns else 1
+                deal_pct1 = (deal1 / total1 * 100) if total1 > 0 else 0
+                
+                deal2 = course2_data[deal_cols].sum(axis=1).values[0] if all(col in course2_data.columns for col in deal_cols) else 0
+                total2 = course2_data['Total'].values[0] if 'Total' in course2_data.columns else 1
+                deal_pct2 = (deal2 / total2 * 100) if total2 > 0 else 0
+                
+                results['deal_pct1'] = round(deal_pct1, 1)
+                results['deal_pct2'] = round(deal_pct2, 1)
+    
+    elif comparison_type == "Owner vs Owner":
+        # Get owner data
+        metric_4 = create_metric_4(df_contacts, df_customers)
+        if not metric_4.empty:
+            # Filter for selected owners
+            owner1_data = metric_4[metric_4['Course Owner'] == item1] if item1 in metric_4['Course Owner'].values else pd.DataFrame()
+            owner2_data = metric_4[metric_4['Course Owner'] == item2] if item2 in metric_4['Course Owner'].values else pd.DataFrame()
+            
+            results['type'] = 'owner_vs_owner'
+            results['item1'] = item1
+            results['item2'] = item2
+            results['data1'] = owner1_data
+            results['data2'] = owner2_data
+    
+    elif comparison_type == "Course vs Owner":
+        # This is more complex - need to get course data for specific owner
+        results['type'] = 'course_vs_owner'
+        results['item1'] = item1  # Course
+        results['item2'] = item2  # Owner
+        
+        # Get courses for this owner
+        owner_courses = df_contacts[(df_contacts['Course Owner'] == item2) & (df_contacts['Course/Program'].notna()) & (df_customers['Course/Program'] != '')].copy()
+        
+        if not owner_courses.empty:
+            # Create pivot for owner's courses
+            pivot = pd.pivot_table(
+                owner_courses,
+                index='Course/Program',
+                columns='Lead Status',
+                values='ID',
+                aggfunc='count',
+                fill_value=0
+            )
+            
+            results['owner_courses'] = pivot.reset_index()
+    
+    return results
+
+def calculate_kpis(df_contacts, df_customers):
+    """Calculate key performance indicators."""
+    if df_contacts.empty:
+        return {}
+    
+    # Total metrics from CONTACTS
+    total_leads = len(df_contacts)
+    
+    # Lead status breakdown from CONTACTS
+    status_counts = df_contacts['Lead Status'].value_counts()
+    
+    cold = status_counts.get('Cold', 0)
+    warm = status_counts.get('Warm', 0)
+    hot = status_counts.get('Hot', 0)
+    new_lead = status_counts.get('New Lead', 0)
+    not_connected = status_counts.get('Not Connected (NC)', 0)
+    not_interested = status_counts.get('Not Interested', 0)
+    not_qualified = status_counts.get('Not Qualified', 0)
+    duplicate = status_counts.get('Duplicate', 0)
+    qualified_lead = status_counts.get('Qualified Lead', 0)
+    
+    # ✅ Check for any "Customer" in leads (should be 0)
+    customer_in_leads = status_counts.get('Customer', 0)
+    
+    # CUSTOMER metrics from DEALS
+    if df_customers is not None and not df_customers.empty:
+        customer = len(df_customers)
+        total_revenue = df_customers['Amount'].sum()
+        original_revenue = df_customers['Original Amount'].sum() if 'Original Amount' in df_customers.columns else total_revenue
+        adjustment = original_revenue - total_revenue
+        avg_revenue_per_customer = round((total_revenue / customer), 0) if customer > 0 else 0
+    else:
+        customer = 0
+        total_revenue = 0
+        original_revenue = 0
+        adjustment = 0
+        avg_revenue_per_customer = 0
+    
+    # Deal Leads = Hot + Warm + Cold + Customer
+    deal_leads = hot + warm + cold + customer
+    
+    # Conversion metrics
+    lead_to_customer_pct = round((customer / total_leads * 100), 1) if total_leads > 0 else 0
+    lead_to_deal_pct = round((deal_leads / total_leads * 100), 1) if total_leads > 0 else 0
+    deal_to_customer_pct = round((customer / deal_leads * 100), 1) if deal_leads > 0 else 0
+    
+    # Top performing metrics
+    top_course = ""
+    top_owner = ""
+    top_revenue_course = ""
+    top_revenue_amount = 0
+    
+    if 'Course/Program' in df_contacts.columns:
+        course_counts = df_contacts['Course/Program'].value_counts()
+        if not course_counts.empty:
+            top_course = str(course_counts.index[0])
+            top_course_count = course_counts.iloc[0]
+    
+    if 'Course Owner' in df_contacts.columns:
+        owner_counts = df_contacts['Course Owner'].value_counts()
+        if not owner_counts.empty:
+            top_owner = str(owner_counts.index[0])
+            top_owner_count = owner_counts.iloc[0]
+    
+    # Best Revenue Course
+    if df_customers is not None and not df_customers.empty and 'Course/Program' in df_customers.columns:
+        revenue_by_course = df_customers.groupby('Course/Program')['Amount'].sum()
+        if not revenue_by_course.empty:
+            top_revenue_course = str(revenue_by_course.index[0])
+            top_revenue_amount = revenue_by_course.iloc[0]
+    
+    # Drop-off ratio
+    dropoff_ratio = round((not_interested + not_qualified + not_connected) / total_leads * 100, 1) if total_leads > 0 else 0
+    
+    return {
+        'total_leads': total_leads,
+        'deal_leads': deal_leads,
+        'cold': cold,
+        'warm': warm,
+        'hot': hot,
+        'customer': customer,  # FROM DEALS ONLY
+        'customer_in_leads': customer_in_leads,  # This should be 0!
+        'new_lead': new_lead,
+        'not_connected': not_connected,
+        'not_interested': not_interested,
+        'not_qualified': not_qualified,
+        'duplicate': duplicate,
+        'qualified_lead': qualified_lead,
+        'lead_to_customer_pct': lead_to_customer_pct,
+        'lead_to_deal_pct': lead_to_deal_pct,
+        'deal_to_customer_pct': deal_to_customer_pct,
+        'total_revenue': total_revenue,
+        'original_revenue': original_revenue,
+        'adjustment': adjustment,
+        'adjustment_pct': round((adjustment / original_revenue * 100), 1) if original_revenue > 0 else 0,
+        'avg_revenue_per_customer': avg_revenue_per_customer,
+        'top_course': top_course[:20] if top_course else "N/A",
+        'top_owner': top_owner[:20] if top_owner else "N/A",
+        'top_revenue_course': top_revenue_course[:20] if top_revenue_course else "N/A",
+        'top_revenue_amount': top_revenue_amount,
+        'dropoff_ratio': dropoff_ratio
+    }
+
 def main():
+    # ✅ SECURITY: Get API key from secrets
+    api_key = get_api_key()
+    
+    if not api_key:
+        st.error("## 🔐 API Key Required")
+        return
+    
     # Header
-    st.markdown('<div class="main-header">📊 KPI Dashboard</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="header-container">
+            <h1 style="margin: 0; font-size: 2.5rem;">📊 HubSpot Business Performance Dashboard</h1>
+            <p style="margin: 0.5rem 0 0 0; font-size: 1.2rem; opacity: 0.9;">🎯 100% CLEAN: NO Customers in Lead Data</p>
+            <p style="margin: 0.5rem 0 0 0; font-size: 1rem; opacity: 0.8;">Customers ONLY from Deals | Leads NEVER contain "Customer"</p>
+            <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; opacity: 0.7;">✅ Partial Payment Logic Applied: Revenue = Deal Amount - Partial Payments Outside Date Range</p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
     
-    # Date Range Selector
-    col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+    # ✅ CRITICAL FIX WARNING
+    st.markdown("""
+    <div class="warning-card">
+        <strong>⚠️ CRITICAL FIXES APPLIED:</strong><br>
+        1. <code>normalize_lead_status()</code> function now <strong>NEVER returns "Customer"</strong><br>
+        2. Any lead status containing customer keywords → "Qualified Lead"<br>
+        3. Customers ONLY come from Deals (Stage IDs)<br>
+        4. <strong>Guaranteed: 0 "Customer" entries in lead data</strong><br>
+        5. ✅ <strong>PARTIAL PAYMENT LOGIC:</strong> Revenue excludes payments outside selected date range
+    </div>
+    """, unsafe_allow_html=True)
     
-    with col1:
-        start_date = st.date_input(
-            "Start Date",
-            value=datetime.now().date() - timedelta(days=30),
-            key="start_date"
-        )
-    
-    with col2:
-        end_date = st.date_input(
-            "End Date",
-            value=datetime.now().date(),
-            key="end_date"
-        )
-    
-    with col3:
-        st.write("")  # Spacer
-        fetch_button = st.button("🚀 Fetch Data", type="primary", use_container_width=True)
-    
-    with col4:
-        st.write("")  # Spacer
-        if st.button("🔄 Compare with Previous", use_container_width=True):
-            st.session_state.compare_mode = not st.session_state.get("compare_mode", False)
-    
-    # Validate date range
-    if start_date > end_date:
-        st.error("Start date must be before end date.")
-        st.stop()
+    # ✅ PARTIAL PAYMENT EXPLANATION
+    st.markdown("""
+    <div class="data-fix-card">
+        <strong>💰 PARTIAL PAYMENT LOGIC EXPLAINED:</strong><br>
+        <strong>Business Rule:</strong> Revenue = Deal Amount - Partial Payments <strong>IF</strong> payment date is <strong>OUTSIDE</strong> selected date range<br><br>
+        
+        <strong>Example Scenarios:</strong><br>
+        • <strong>Case 1:</strong> Partial Payment ₹15,000 on Jan 15 | Dashboard Range: April 1-5 → <strong>SUBTRACT ₹15,000</strong><br>
+        • <strong>Case 2:</strong> Partial Payment ₹15,000 on April 3 | Dashboard Range: April 1-5 → <strong>KEEP ₹15,000</strong><br>
+        • <strong>Case 3:</strong> No Partial Payment → <strong>KEEP full deal amount</strong><br><br>
+        
+        <strong>Result:</strong> Revenue shows only money <strong>ACTUALLY RECEIVED</strong> during selected period
+    </div>
+    """, unsafe_allow_html=True)
     
     # Initialize session state
-    if "current_data" not in st.session_state:
-        st.session_state.current_data = None
-    if "previous_data" not in st.session_state:
-        st.session_state.previous_data = None
+    if 'contacts_df' not in st.session_state:
+        st.session_state.contacts_df = None
+    if 'customers_df' not in st.session_state:
+        st.session_state.customers_df = None
+    if 'owner_mapping' not in st.session_state:
+        st.session_state.owner_mapping = None
+    if 'metrics' not in st.session_state:
+        st.session_state.metrics = {}
+    if 'date_filter' not in st.session_state:
+        st.session_state.date_filter = None
+    if 'date_range' not in st.session_state:
+        st.session_state.date_range = None
+    if 'deal_stages' not in st.session_state:
+        st.session_state.deal_stages = None
+    if 'customer_stage_ids' not in st.session_state:
+        st.session_state.customer_stage_ids = []
+    if 'revenue_data' not in st.session_state:
+        st.session_state.revenue_data = None
+    if 'matrix_data' not in st.session_state:
+        st.session_state.matrix_data = None
     
-    # Fetch and process data when button is clicked
-    if fetch_button:
-        with st.spinner("Fetching data from HubSpot..."):
-            # Fetch current period data
-            deals = fetch_hubspot_deals(
-                start_date=datetime.combine(start_date, datetime.min.time()),
-                end_date=datetime.combine(end_date, datetime.max.time()),
-                token=HUBSPOT_ACCESS_TOKEN
-            )
+    # ✅ Fetch Deal Pipeline Stages FIRST
+    if 'deal_stages' not in st.session_state or st.session_state.deal_stages is None:
+        with st.spinner("🔍 Loading deal pipeline stages..."):
+            deal_stages = fetch_deal_pipeline_stages(api_key)
+            st.session_state.deal_stages = deal_stages
+    
+    # Create sidebar
+    with st.sidebar:
+        st.markdown("## 🔧 Configuration")
+        
+        # ✅ Deal Stage Configuration
+        st.markdown("### 🎯 Customer Deal Stage Configuration")
+        
+        if st.session_state.deal_stages:
+            all_stages = st.session_state.deal_stages
+            detected_stages = detect_admission_confirmed_stage(all_stages)
             
-            if deals:
-                current_df = process_deals_as_customers(deals, start_date, end_date)
-                st.session_state.current_data = current_df
+            if detected_stages:
+                st.success(f"✅ Auto-detected {len(detected_stages)} customer stage(s)")
                 
-                # Calculate previous period data for comparison
-                previous_start = start_date - (end_date - start_date) - timedelta(days=1)
-                previous_end = start_date - timedelta(days=1)
+                # Reset customer stage IDs
+                st.session_state.customer_stage_ids = []
                 
-                previous_deals = fetch_hubspot_deals(
-                    start_date=datetime.combine(previous_start, datetime.min.time()),
-                    end_date=datetime.combine(previous_end, datetime.max.time()),
-                    token=HUBSPOT_ACCESS_TOKEN
+                for idx, stage in enumerate(detected_stages):
+                    with st.expander(f"Stage {idx+1}: {stage['stage_label']}", expanded=idx==0):
+                        st.write(f"**Stage ID:** `{stage['stage_id']}`")
+                        st.write(f"**Pipeline:** {stage['pipeline']}")
+                        
+                        if st.checkbox(f"Use '{stage['stage_label']}' as customer stage", 
+                                      value=True, key=f"use_stage_{stage['stage_id']}"):
+                            if stage['stage_id'] not in st.session_state.customer_stage_ids:
+                                st.session_state.customer_stage_ids.append(stage['stage_id'])
+                
+                # Manual stage selection
+                st.markdown("#### 🔧 Manual Stage Selection")
+                
+                all_stage_options = []
+                for stage_id, stage_info in all_stages.items():
+                    label = stage_info.get("stage_label", "Unknown")
+                    pipeline = stage_info.get("pipeline_label", "Unknown")
+                    probability = stage_info.get("probability", "0")
+                    all_stage_options.append({
+                        "id": stage_id,
+                        "display": f"{label} (Pipeline: {pipeline}, Probability: {probability})"
+                    })
+                
+                all_stage_options.sort(key=lambda x: x["display"])
+                
+                selected_manual_stages = st.multiselect(
+                    "Select additional customer stages:",
+                    options=[s["display"] for s in all_stage_options],
+                    default=[],
+                    help="Manually select other stages that indicate customers"
                 )
                 
-                if previous_deals:
-                    previous_df = process_deals_as_customers(previous_deals, previous_start, previous_end)
-                    st.session_state.previous_data = previous_df
-                else:
-                    st.session_state.previous_data = None
+                # Map back to IDs
+                manual_stage_ids = []
+                for display in selected_manual_stages:
+                    for stage in all_stage_options:
+                        if stage["display"] == display:
+                            manual_stage_ids.append(stage["id"])
+                            break
                 
-                st.success(f"Successfully fetched {len(current_df)} customers!")
+                # Combine
+                all_selected_ids = st.session_state.customer_stage_ids + manual_stage_ids
+                all_selected_ids = list(set(all_selected_ids))
+                
+                if all_selected_ids:
+                    global CUSTOMER_DEAL_STAGES
+                    CUSTOMER_DEAL_STAGES = all_selected_ids
+                    
+                    with st.expander("📋 Selected Customer Stages", expanded=True):
+                        for stage_id in CUSTOMER_DEAL_STAGES:
+                            if stage_id in all_stages:
+                                info = all_stages[stage_id]
+                                st.write(f"• **{info.get('stage_label')}** (`{stage_id}`)")
+                else:
+                    st.warning("⚠️ No customer stages selected")
             else:
-                st.error("No data found for the selected date range.")
-                st.stop()
+                st.error("❌ No customer stages auto-detected")
+        
+        st.divider()
+        
+        # Date Range
+        st.markdown("## 📅 Date Range Filter")
+        
+        date_field = st.selectbox(
+            "Select date field for LEADS:",
+            ["Created Date", "Last Modified Date", "Both"]
+        )
+        
+        default_end = datetime.now(IST).date()
+        default_start = default_end - timedelta(days=30)
+        
+        start_date = st.date_input("Start date", value=default_start)
+        end_date = st.date_input("End date", value=default_end)
+        
+        if start_date > end_date:
+            st.error("Start date must be before end date!")
+            return
+        
+        st.divider()
+        
+        # Quick Actions
+        st.markdown("## ⚡ Quick Actions")
+        
+        fetch_disabled = not CUSTOMER_DEAL_STAGES
+        
+        if st.button("🚀 Fetch ALL Data", 
+                    type="primary", 
+                    use_container_width=True,
+                    disabled=fetch_disabled):
+            
+            if not CUSTOMER_DEAL_STAGES:
+                st.error("❌ Please configure customer deal stages first")
+                return
+                
+            if start_date > end_date:
+                st.error("Start date must be before end date.")
+            else:
+                with st.spinner("Fetching data..."):
+                    is_valid, message = test_hubspot_connection(api_key)
+                    
+                    if is_valid:
+                        # Store date filter info
+                        st.session_state.date_filter = date_field
+                        st.session_state.date_range = (start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+                        
+                        # Fetch owners
+                        owner_mapping = fetch_owner_mapping(api_key)
+                        st.session_state.owner_mapping = owner_mapping
+                        
+                        # Fetch CONTACTS (Leads)
+                        contacts, total_contacts = fetch_hubspot_contacts_with_date_filter(
+                            api_key, date_field, start_date, end_date
+                        )
+                        
+                        # ✅ Fetch DEALS using Stage IDs
+                        deals, total_deals = fetch_hubspot_deals(
+                            api_key, start_date, end_date, CUSTOMER_DEAL_STAGES
+                        )
+                        
+                        if contacts:
+                            # Process contacts (leads)
+                            df_contacts = process_contacts_data(contacts, owner_mapping, api_key)
+                            st.session_state.contacts_df = df_contacts
+                            
+                            # Process deals (customers) - PASS start_date and end_date
+                            df_customers = process_deals_as_customers(
+                                deals, 
+                                owner_mapping, 
+                                api_key, 
+                                st.session_state.deal_stages,
+                                start_date,  # ✅ PASS start_date
+                                end_date     # ✅ PASS end_date
+                            )
+                            st.session_state.customers_df = df_customers
+                            
+                            # Calculate metrics - ADD NEW METRIC 5
+                            st.session_state.metrics = {
+                                'metric_1': create_metric_1(df_contacts),
+                                'metric_2': create_metric_2(df_contacts),
+                                'metric_4': create_metric_4(df_contacts, df_customers),
+                                'metric_5': create_metric_5(df_contacts, df_customers)  # ✅ NEW METRIC
+                            }
+                            
+                            # ✅ NEW: Calculate revenue data
+                            st.session_state.revenue_data = create_course_revenue(df_customers)
+                            
+                            # ✅ NEW: Calculate matrix data
+                            st.session_state.matrix_data = create_volume_conversion_matrix(
+                                st.session_state.metrics['metric_1'], df_contacts, df_customers
+                            )
+                            
+                            st.success(f"""
+                            ✅ Successfully loaded:
+                            • 📊 {len(contacts)} contacts (leads)
+                            • 💰 {len(deals)} customers (from deals)
+                            • ✅ Partial payment logic applied
+                            """)
+                            st.rerun()
+                        else:
+                            st.warning("No contacts found")
+                    else:
+                        st.error(f"Connection failed: {message}")
+        
+        if st.button("🔄 Refresh Analysis", use_container_width=True, 
+                    disabled=st.session_state.contacts_df is None):
+            if st.session_state.contacts_df is not None:
+                df_contacts = st.session_state.contacts_df
+                df_customers = st.session_state.customers_df
+                
+                st.session_state.metrics = {
+                    'metric_1': create_metric_1(df_contacts),
+                    'metric_2': create_metric_2(df_contacts),
+                    'metric_4': create_metric_4(df_contacts, df_customers),
+                    'metric_5': create_metric_5(df_contacts, df_customers)  # ✅ NEW METRIC
+                }
+                
+                # ✅ NEW: Refresh revenue data
+                st.session_state.revenue_data = create_course_revenue(df_customers)
+                
+                # ✅ NEW: Refresh matrix data
+                st.session_state.matrix_data = create_volume_conversion_matrix(
+                    st.session_state.metrics['metric_1'], df_contacts, df_customers
+                )
+                
+                st.success("Analysis refreshed!")
+                st.rerun()
+        
+        if st.button("🗑️ Clear All Data", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
+        
+        st.divider()
+        
+        # ✅ NEW: Download Section in Sidebar
+        st.markdown("## 📥 Download Options")
+        
+        if st.session_state.contacts_df is not None and not st.session_state.contacts_df.empty:
+            df_contacts = st.session_state.contacts_df
+            df_customers = st.session_state.customers_df
+            metrics = st.session_state.metrics
+            
+            if df_contacts is not None:
+                kpis = calculate_kpis(df_contacts, df_customers)
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Download Raw Data as CSV
+                    csv = df_contacts.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📄 Raw Data CSV",
+                        data=csv,
+                        file_name=f"hubspot_raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        help="Download all contact data as CSV"
+                    )
+                
+                with col2:
+                    # Download KPI Dashboard as CSV
+                    if 'metric_4' in metrics and not metrics['metric_4'].empty:
+                        csv_kpi = metrics['metric_4'].to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="📊 KPI Dashboard CSV",
+                            data=csv_kpi,
+                            file_name=f"hubspot_kpi_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                            help="Download owner KPI dashboard as CSV"
+                        )
+                
+                # Excel Download Button
+                if st.button("📊 Download Full Excel Report", use_container_width=True, type="primary"):
+                    with st.spinner("🔄 Generating professional Excel report..."):
+                        try:
+                            excel_data = create_excel_report(
+                                df_contacts, 
+                                df_customers,
+                                metrics, 
+                                kpis, 
+                                st.session_state.date_range,
+                                st.session_state.date_filter
+                            )
+                            
+                            st.download_button(
+                                label="⬇️ Click to Download Excel Report",
+                                data=excel_data,
+                                file_name=f"HubSpot_Analytics_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                help="Download comprehensive Excel report with multiple sheets and formatting"
+                            )
+                            st.success("✅ Excel report generated successfully!")
+                        except Exception as e:
+                            st.error(f"❌ Error generating Excel report: {str(e)}")
+        
+        st.divider()
+        
+        st.markdown("### 📊 Dashboard Logic")
+        st.info("""
+        **🎯 GUARANTEED DATA PURITY:**
+        
+        1️⃣ **Leads (Contacts):**
+        • NEVER contain "Customer" status
+        • Customer keywords → "Qualified Lead"
+        • Clean pipeline stages only
+        
+        2️⃣ **Customers (Deals):**
+        • ONLY from Deals API
+        • Filtered by Stage IDs
+        • Revenue from deal amounts
+        
+        3️⃣ **💰 PARTIAL PAYMENT LOGIC:**
+        • Revenue = Deal Amount - Partial Payments <strong>IF</strong> payment date is <strong>OUTSIDE</strong> selected date range
+        • Shows only money <strong>ACTUALLY RECEIVED</strong> during period
+        
+        **✅ 100% ACCURATE SEPARATION**
+        
+        **📈 COURSE CLASSIFICATION:**
+        • ⭐ Star: High volume + High conversion
+        • 📈 Potential: Low volume + High conversion  
+        • ⚠️ Burn: High volume + Low conversion
+        • ❌ Weak: Low volume + Low conversion
+        """)
     
-    # Display KPIs if data exists
-    if st.session_state.current_data is not None:
-        current_df = st.session_state.current_data
-        previous_df = st.session_state.previous_data
+    # Main content area
+    if st.session_state.contacts_df is not None and not st.session_state.contacts_df.empty:
+        df_contacts = st.session_state.contacts_df
+        df_customers = st.session_state.customers_df
+        metrics = st.session_state.metrics
+        revenue_data = st.session_state.revenue_data
+        matrix_data = st.session_state.matrix_data
         
-        # Calculate KPIs
-        current_kpis = calculate_kpis(current_df)
-        previous_kpis = calculate_kpis(previous_df) if previous_df is not None else None
+        # ✅ Data Validation FIRST
+        st.markdown("### ✅ Data Validation Check")
         
-        # Display KPI Cards
-        st.markdown("### 📈 Key Performance Indicators")
+        # Check for "Customer" in leads
+        customer_in_leads = (df_contacts['Lead Status'] == 'Customer').sum()
         
-        # Row 1: Revenue KPIs
+        if customer_in_leads > 0:
+            st.error(f"❌ CRITICAL ERROR: Found {customer_in_leads} 'Customer' entries in leads!")
+            
+            # Show what's causing this
+            st.write("**Raw values being incorrectly marked as 'Customer':**")
+            customer_rows = df_contacts[df_contacts['Lead Status'] == 'Customer']
+            unique_raw = customer_rows['Lead Status Raw'].dropna().unique()
+            
+            for raw_val in unique_raw[:5]:
+                st.write(f"- `{raw_val}` → Customer")
+            
+            # Auto-fix option
+            if st.button("🔄 Auto-fix: Convert 'Customer' to 'Qualified Lead'"):
+                df_contacts_fixed = df_contacts.copy()
+                df_contacts_fixed['Lead Status'] = df_contacts_fixed['Lead Status'].replace('Customer', 'Qualified Lead')
+                st.session_state.contacts_df = df_contacts_fixed
+                st.success("✅ Fixed! 'Customer' entries converted to 'Qualified Lead'")
+                st.rerun()
+            
+            st.divider()
+        else:
+            st.success("✅ PERFECT: 0 'Customer' entries in lead data")
+        
+        # ✅ PARTIAL PAYMENT SUMMARY
+        if df_customers is not None and not df_customers.empty:
+            kpis = calculate_kpis(df_contacts, df_customers)
+            
+            if kpis.get('adjustment', 0) != 0:
+                st.markdown(f"""
+                <div class="data-fix-card">
+                    <strong>💰 PARTIAL PAYMENT ADJUSTMENT SUMMARY:</strong><br>
+                    • Original Deal Amount: ₹{kpis.get('original_revenue', 0):,.0f}<br>
+                    • After Partial Payment Adjustment: <strong>₹{kpis.get('total_revenue', 0):,.0f}</strong><br>
+                    • Adjustment: ₹{kpis.get('adjustment', 0):,.0f} ({kpis.get('adjustment_pct', 0):.1f}%)<br>
+                    • <strong>Revenue shows ONLY money received during {st.session_state.date_range[0]} to {st.session_state.date_range[1]}</strong>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # ✅ NEW: Enhanced Download Section at the Top
+        st.markdown('<div class="section-header"><h2>📥 Download Center</h2></div>', unsafe_allow_html=True)
+        
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            change = None
-            if previous_kpis:
-                change = current_kpis.get("Revenue Change %", 0)
-            display_kpi_card("Total Revenue", current_kpis["Total Revenue"], change)
-        
-        with col2:
-            display_kpi_card("Avg Revenue/Customer", current_kpis["Avg Revenue/Customer"], None, "$")
-        
-        with col3:
-            change = None
-            if previous_kpis:
-                change = current_kpis.get("Customer Change %", 0)
-            display_kpi_card("Total Customers", current_kpis["Total Customers"], change, "", False)
-        
-        # Row 2: Customer Status KPIs
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            display_kpi_card("Active Customers", current_kpis["Active Customers"], None, "", False)
-        
-        with col2:
-            display_kpi_card("Inactive Customers", current_kpis["Inactive Customers"], None, "", False)
-        
-        with col3:
-            display_kpi_card("Pending Customers", current_kpis["Pending Customers"], None, "", False)
-        
-        # Revenue Breakdown
-        st.markdown("---")
-        st.markdown("### 📊 Revenue Breakdown")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("##### By Course")
-            if not current_kpis["Course Revenue"].empty:
-                course_df = current_kpis["Course Revenue"].reset_index()
-                course_df.columns = ["Course", "Revenue"]
-                course_df["Revenue"] = course_df["Revenue"].apply(lambda x: f"${x:,.0f}")
-                st.dataframe(course_df, use_container_width=True, hide_index=True)
-            else:
-                st.info("No course revenue data available.")
-        
-        with col2:
-            st.markdown("##### By Program")
-            if not current_kpis["Program Revenue"].empty:
-                program_df = current_kpis["Program Revenue"].reset_index()
-                program_df.columns = ["Program", "Revenue"]
-                program_df["Revenue"] = program_df["Revenue"].apply(lambda x: f"${x:,.0f}")
-                st.dataframe(program_df, use_container_width=True, hide_index=True)
-            else:
-                st.info("No program revenue data available.")
-        
-        # Customer Details Table
-        st.markdown("---")
-        st.markdown("### 👥 Customer Details")
-        
-        # Add filters
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            status_filter = st.multiselect(
-                "Filter by Status",
-                options=["Active", "Inactive", "Pending"],
-                default=["Active", "Inactive", "Pending"]
+            # Download Raw Data
+            csv_raw = df_contacts.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📄 Download Raw Data (CSV)",
+                data=csv_raw,
+                file_name=f"hubspot_raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="All contact records with complete details"
             )
         
         with col2:
-            course_filter = st.multiselect(
-                "Filter by Course",
-                options=sorted(current_df["Course"].unique()),
-                default=[]
-            )
+            # Download Course KPI Dashboard (NEW)
+            if 'metric_5' in metrics and not metrics['metric_5'].empty:
+                csv_course_kpi = metrics['metric_5'].to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📚 Download Course KPI Dashboard (CSV)",
+                    data=csv_course_kpi,
+                    file_name=f"hubspot_course_kpi_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    help="Course performance metrics with conversion rates"
+                )
         
         with col3:
-            min_amount, max_amount = st.slider(
-                "Filter by Amount",
-                min_value=0,
-                max_value=int(current_df["Amount"].max()) if not current_df.empty else 10000,
-                value=(0, int(current_df["Amount"].max()) if not current_df.empty else 10000),
-                step=1000
+            # Premium Excel Report Button
+            if st.button("💎 Generate Premium Excel Report", use_container_width=True, type="primary"):
+                with st.spinner("✨ Creating premium Excel report with formatting..."):
+                    try:
+                        kpis = calculate_kpis(df_contacts, df_customers)
+                        excel_data = create_excel_report(
+                            df_contacts, 
+                            df_customers,
+                            metrics, 
+                            kpis, 
+                            st.session_state.date_range,
+                            st.session_state.date_filter
+                        )
+                        
+                        st.download_button(
+                            label="⬇️ Download Premium Excel Report",
+                            data=excel_data,
+                            file_name=f"HubSpot_Premium_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                        st.success("✅ Premium Excel report ready for download!")
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
+        
+        st.divider()
+        
+        # ✅ NEW: Global Filters at the top
+        st.markdown("### 🎛️ Global Filters")
+        filter_col1, filter_col2, filter_col3 = st.columns(3)
+        
+        with filter_col1:
+            # Course filter
+            courses = df_contacts['Course/Program'].dropna().unique()
+            courses = [str(c).strip() for c in courses if str(c).strip() != '']
+            selected_courses = st.multiselect(
+                "Filter by Course:",
+                options=courses[:50] if len(courses) > 50 else courses,
+                default=[],
+                help="Select courses to filter all views"
+            )
+        
+        with filter_col2:
+            # Owner filter
+            owners = df_contacts['Course Owner'].dropna().unique()
+            owners = [str(o).strip() for o in owners if str(o).strip() != '']
+            selected_owners = st.multiselect(
+                "Filter by Owner:",
+                options=owners[:50] if len(owners) > 50 else owners,
+                default=[],
+                help="Select owners to filter all views"
+            )
+        
+        with filter_col3:
+            # Lead Status filter
+            lead_statuses = df_contacts['Lead Status'].dropna().unique()
+            lead_statuses = [str(s).strip() for s in lead_statuses if str(s).strip() != '']
+            selected_statuses = st.multiselect(
+                "Filter by Lead Status:",
+                options=lead_statuses,
+                default=[],
+                help="Select lead statuses to filter all views"
             )
         
         # Apply filters
-        filtered_df = current_df.copy()
+        filtered_df = df_contacts.copy()
         
-        if status_filter:
-            filtered_df = filtered_df[filtered_df["Status"].isin(status_filter)]
+        if selected_courses:
+            filtered_df = filtered_df[filtered_df['Course/Program'].isin(selected_courses)]
         
-        if course_filter:
-            filtered_df = filtered_df[filtered_df["Course"].isin(course_filter)]
+        if selected_owners:
+            filtered_df = filtered_df[filtered_df['Course Owner'].isin(selected_owners)]
         
-        filtered_df = filtered_df[
-            (filtered_df["Amount"] >= min_amount) & 
-            (filtered_df["Amount"] <= max_amount)
-        ]
+        if selected_statuses:
+            filtered_df = filtered_df[filtered_df['Lead Status'].isin(selected_statuses)]
         
-        # Display filtered table
-        if not filtered_df.empty:
-            # Format Amount column
-            display_df = filtered_df.copy()
-            display_df["Amount"] = display_df["Amount"].apply(lambda x: f"${x:,.0f}")
-            
-            st.dataframe(
-                display_df,
-                use_container_width=True,
-                column_config={
-                    "Customer Name": st.column_config.TextColumn("Customer", width="large"),
-                    "Status": st.column_config.TextColumn("Status", width="small"),
-                    "Amount": st.column_config.TextColumn("Amount", width="medium"),
-                    "Course": st.column_config.TextColumn("Course", width="medium"),
-                    "Program": st.column_config.TextColumn("Program", width="medium"),
-                    "Close Date": st.column_config.TextColumn("Close Date", width="small")
-                },
-                hide_index=True
-            )
-            
-            # Export option
-            csv = filtered_df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Export as CSV",
-                data=csv,
-                file_name=f"customers_{start_date}_to_{end_date}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+        # Update metrics with filtered data
+        filtered_metrics = {
+            'metric_1': create_metric_1(filtered_df),
+            'metric_2': create_metric_2(filtered_df),
+            'metric_4': create_metric_4(filtered_df, df_customers),
+            'metric_5': create_metric_5(filtered_df, df_customers)  # ✅ NEW METRIC
+        }
+        
+        # Show filter info
+        filter_info = []
+        if selected_courses:
+            filter_info.append(f"{len(selected_courses)} courses")
+        if selected_owners:
+            filter_info.append(f"{len(selected_owners)} owners")
+        if selected_statuses:
+            filter_info.append(f"{len(selected_statuses)} statuses")
+        
+        if filter_info:
+            st.info(f"📊 Showing {len(filtered_df):,} contacts (filtered by: {', '.join(filter_info)})")
         else:
-            st.info("No customers match the selected filters.")
+            st.info(f"📊 Showing all {len(filtered_df):,} contacts (no filters applied)")
+        
+        # ✅ Enhanced Executive KPI Dashboard
+        st.markdown('<div class="section-header"><h2>🏆 Executive Business Dashboard</h2></div>', unsafe_allow_html=True)
+        
+        # Calculate KPIs
+        kpis = calculate_kpis(df_contacts, df_customers)
+        
+        # Primary KPI Row
+        st.markdown(
+            render_kpi_row([
+                render_kpi("Total Leads", f"{kpis['total_leads']:,}", "From Contacts", "kpi-box-blue"),
+                render_kpi("Deal Leads", f"{kpis['deal_leads']:,}", f"{kpis['lead_to_deal_pct']}% conversion", "kpi-box-green"),
+                render_kpi("Customers", f"{kpis['customer']:,}", "From Deals ONLY", "deal-kpi"),
+                render_kpi("Total Revenue", f"₹{kpis['total_revenue']:,.0f}", f"Adjusted for partial payments", "revenue-kpi"),
+            ]),
+            unsafe_allow_html=True
+        )
+        
+        # Warning if there are customers in leads
+        if kpis['customer_in_leads'] > 0:
+            st.error(f"🚨 DATA ISSUE: {kpis['customer_in_leads']} 'Customer' entries found in leads data")
+        
+        # Secondary KPI Row
+        st.markdown(
+            render_kpi_row([
+                render_secondary_kpi("Lead→Customer", f"{kpis['lead_to_customer_pct']}%", "Leads become customers"),
+                render_secondary_kpi("Lead→Deal", f"{kpis['lead_to_deal_pct']}%", "Leads in pipeline"),
+                render_secondary_kpi("Deal→Customer", f"{kpis['deal_to_customer_pct']}%", "Pipeline conversion"),
+                render_secondary_kpi("Avg Revenue", f"₹{kpis['avg_revenue_per_customer']:,}", "Per customer"),
+                render_secondary_kpi("Adjustment", f"-₹{abs(kpis['adjustment']):,}", f"{kpis['adjustment_pct']}% of original"),
+            ], container_class="secondary-kpi-container"),
+            unsafe_allow_html=True
+        )
+        
+        # ✅ NEW: Filtered KPI Cards
+        if selected_courses or selected_owners or selected_statuses:
+            filtered_kpis = calculate_kpis(filtered_df, df_customers)
+            
+            st.markdown('<div class="section-header"><h3>📊 Filtered View KPIs</h3></div>', unsafe_allow_html=True)
+            
+            st.markdown(
+                render_kpi_row([
+                    render_kpi("Filtered Leads", f"{filtered_kpis['total_leads']:,}", f"{filtered_kpis['total_leads']/kpis['total_leads']*100:.1f}% of total", "kpi-box-orange"),
+                    render_kpi("Lead→Customer %", f"{filtered_kpis['lead_to_customer_pct']}%", f"{filtered_kpis['customer']:,} customers", "kpi-box-green"),
+                    render_kpi("Lead→Deal %", f"{filtered_kpis['lead_to_deal_pct']}%", f"{filtered_kpis['deal_leads']:,} deals", "kpi-box-purple"),
+                    render_kpi("Total Revenue", f"₹{filtered_kpis['total_revenue']:,.0f}", f"Filtered revenue", "revenue-kpi"),
+                ]),
+                unsafe_allow_html=True
+            )
+            
+            # Download filtered data
+            st.markdown("### 📥 Download Filtered Data")
+            col_f1, col_f2 = st.columns(2)
+            
+            with col_f1:
+                csv_filtered = filtered_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📄 Download Filtered Data (CSV)",
+                    data=csv_filtered,
+                    file_name=f"hubspot_filtered_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+        
+        st.divider()
+        
+        # ✅ ENHANCED: Create tabs with NEW Course Performance tab and NEW Owner Visual Analytics tab
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+            "📊 Lead Analysis", 
+            "💰 Customer Analysis", 
+            "📈 Owner KPI Dashboard",
+            "📚 Course KPI Dashboard",  # ✅ NEW TAB
+            "👑 Owner Visual Analytics",  # ✅ NEW VISUAL TAB
+            "📉 Volume vs Conversion",
+            "💸 Revenue Analysis",
+            "🆚 Comparison View"
+        ])
+        
+        # SECTION 1: Lead Analysis
+        with tab1:
+            st.markdown('<div class="section-header"><h3>📊 Lead Analysis (Contacts)</h3></div>', unsafe_allow_html=True)
+            
+            # Lead Status Distribution
+            st.markdown("#### Lead Status Distribution")
+            
+            status_counts = filtered_df['Lead Status'].value_counts().reset_index()
+            status_counts.columns = ['Lead Status', 'Count']
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig = px.pie(
+                    status_counts,
+                    values='Count',
+                    names='Lead Status',
+                    title='Lead Status Distribution',
+                    hole=0.3,
+                    color_discrete_sequence=COLOR_PALETTE
+                )
+                fig.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                # Top Courses
+                if 'Course/Program' in filtered_df.columns:
+                    course_counts = filtered_df['Course/Program'].value_counts().head(10).reset_index()
+                    course_counts.columns = ['Course', 'Count']
+                    
+                    fig = px.bar(
+                        course_counts,
+                        x='Course',
+                        y='Count',
+                        title='Top 10 Courses by Lead Volume',
+                        color='Count',
+                        color_continuous_scale='Viridis'
+                    )
+                    fig.update_layout(xaxis_tickangle=-45, height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # Lead Data Table
+            st.markdown("#### Lead Data")
+            st.dataframe(filtered_df, use_container_width=True, height=300)
+        
+        # SECTION 2: Customer Analysis
+        with tab2:
+            st.markdown('<div class="section-header"><h3>💰 Customer Analysis (From Deals)</h3></div>', unsafe_allow_html=True)
+            
+            if df_customers is not None and not df_customers.empty:
+                # Customer KPIs with partial payment info
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    total_customers = len(df_customers)
+                    st.metric("Total Customers", f"{total_customers:,}")
+                
+                with col2:
+                    total_revenue = df_customers['Amount'].sum()
+                    st.metric("Adjusted Revenue", f"₹{total_revenue:,.0f}")
+                
+                with col3:
+                    original_revenue = df_customers['Original Amount'].sum() if 'Original Amount' in df_customers.columns else total_revenue
+                    st.metric("Original Revenue", f"₹{original_revenue:,.0f}")
+                
+                with col4:
+                    adjustment = original_revenue - total_revenue
+                    st.metric("Partial Payment Adj", f"-₹{abs(adjustment):,.0f}")
+                
+                # Revenue by Course
+                st.markdown("#### Revenue by Course (After Partial Payment Adjustment)")
+                
+                if 'Course/Program' in df_customers.columns:
+                    revenue_by_course = df_customers.groupby('Course/Program')['Amount'].sum().reset_index()
+                    revenue_by_course = revenue_by_course.sort_values('Amount', ascending=False).head(10)
+                    
+                    fig = px.bar(
+                        revenue_by_course,
+                        x='Course/Program',
+                        y='Amount',
+                        title='Top 10 Courses by Revenue (Adjusted)',
+                        color='Amount',
+                        color_continuous_scale='Viridis',
+                        text='Amount'
+                    )
+                    fig.update_traces(
+                        texttemplate='₹%{text:,.0f}',
+                        textposition='outside'
+                    )
+                    fig.update_layout(xaxis_tickangle=-45, height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                # Customer Data Table
+                st.markdown("#### Customer Deal Data (With Partial Payment Info)")
+                display_df = df_customers.copy()
+                
+                # Format columns
+                if 'Amount' in display_df.columns:
+                    display_df['Amount'] = display_df['Amount'].apply(lambda x: f"₹{x:,.0f}")
+                if 'Original Amount' in display_df.columns:
+                    display_df['Original Amount'] = display_df['Original Amount'].apply(lambda x: f"₹{x:,.0f}")
+                
+                # Show partial payment adjustment
+                display_df['Adjustment'] = display_df.apply(
+                    lambda row: f"₹{float(str(row['Original Amount']).replace('₹', '').replace(',', '')) - float(str(row['Amount']).replace('₹', '').replace(',', '')):,.0f}" 
+                    if 'Original Amount' in row and 'Amount' in row else "₹0", 
+                    axis=1
+                )
+                
+                st.dataframe(display_df, use_container_width=True, height=300)
+            else:
+                st.info("No customer data available")
+        
+        # SECTION 3: Owner KPI Dashboard
+        with tab3:
+            st.markdown('<div class="section-header"><h3>📈 Owner Performance KPI Dashboard</h3></div>', unsafe_allow_html=True)
+            
+            metric_4 = filtered_metrics['metric_4']
+            
+            if not metric_4.empty:
+                # KPI Table with conditional formatting
+                st.markdown("#### Owner Performance KPI Table")
+                
+                def highlight_lead_to_customer(val):
+                    if isinstance(val, (int, float)):
+                        if val < 3:
+                            return 'background-color: #f8d7da; color: #721c24; font-weight: bold'
+                        elif val < 8:
+                            return 'background-color: #fff3cd; color: #856404; font-weight: bold'
+                        else:
+                            return 'background-color: #d4edda; color: #155724; font-weight: bold'
+                    return ''
+                
+                display_df = metric_4.style.applymap(highlight_lead_to_customer, subset=['Lead→Customer %'])
+                st.dataframe(display_df, use_container_width=True, height=400)
+        
+        # ✅ NEW SECTION 4: Course Performance KPI Dashboard
+        with tab4:
+            st.markdown('<div class="section-header"><h3>📚 Course Performance KPI Dashboard</h3></div>', unsafe_allow_html=True)
+            
+            metric_5 = filtered_metrics['metric_5']
+            
+            if not metric_5.empty:
+                # KPI Table with conditional formatting
+                st.markdown("#### Course Performance KPI Table")
+                
+                def highlight_course_performance(val):
+                    if isinstance(val, (int, float)):
+                        if val < 3:
+                            return 'background-color: #f8d7da; color: #721c24; font-weight: bold'
+                        elif val < 8:
+                            return 'background-color: #fff3cd; color: #856404; font-weight: bold'
+                        else:
+                            return 'background-color: #d4edda; color: #155724; font-weight: bold'
+                    return ''
+                
+                # Apply conditional formatting
+                styled_df = metric_5.style.applymap(
+                    highlight_course_performance, 
+                    subset=['Lead→Customer %']
+                ).applymap(
+                    highlight_course_performance, 
+                    subset=['Customer %']
+                )
+                
+                st.dataframe(styled_df, use_container_width=True, height=400)
+                
+                # Download Course KPI Data
+                st.markdown("### 📥 Export Course KPI Data")
+                col_course1, col_course2 = st.columns(2)
+                
+                with col_course1:
+                    csv_course = metric_5.to_csv(index=False)
+                    st.download_button(
+                        "📊 Download Course KPI Data (CSV)",
+                        csv_course,
+                        "course_performance_kpi.csv",
+                        "text/csv",
+                        use_container_width=True
+                    )
+            else:
+                st.info("No course performance data available")
+        
+        # ✅ NEW SECTION 5: Owner Visual Analytics
+        with tab5:
+            st.markdown('<div class="section-header"><h3>👑 Course Owner Visual Analytics</h3></div>', unsafe_allow_html=True)
+            
+            metric_4 = filtered_metrics['metric_4']
+            
+            if not metric_4.empty:
+                # Owner Selection for Comparison
+                st.markdown("### 🎯 Select Owners for Comparison")
+                
+                owner_names = metric_4['Course Owner'].unique().tolist()
+                owner_names = [str(name) for name in owner_names if str(name) != '']
+                
+                selected_owners_visual = st.multiselect(
+                    "Choose owners to compare:",
+                    options=owner_names[:20] if len(owner_names) > 20 else owner_names,
+                    default=owner_names[:3] if len(owner_names) >= 3 else owner_names,
+                    help="Select up to 4 owners for visual comparison"
+                )
+                
+                # Limit to 4 owners for better visualization
+                if len(selected_owners_visual) > 4:
+                    st.warning("⚠️ Showing only first 4 owners for better visualization")
+                    selected_owners_visual = selected_owners_visual[:4]
+                
+                if selected_owners_visual:
+                    # 1. Owner Scorecards
+                    st.markdown("### 🏆 Owner Performance Scorecards")
+                    
+                    scorecards = create_owner_scorecards(metric_4[metric_4['Course Owner'].isin(selected_owners_visual)], top_n=6)
+                    
+                    if scorecards:
+                        # Display scorecards in a grid
+                        cols = st.columns(3)
+                        for idx, scorecard in enumerate(scorecards):
+                            with cols[idx % 3]:
+                                st.markdown(scorecard, unsafe_allow_html=True)
+                    
+                    # 2. Owner Comparison Radar Chart
+                    st.markdown("### 📊 Owner Performance Comparison")
+                    
+                    radar_fig, radar_owners = create_owner_radar_chart(metric_4, selected_owners_visual)
+                    
+                    if radar_fig:
+                        st.plotly_chart(radar_fig, use_container_width=True)
+                        
+                        st.markdown("""
+                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
+                        <strong>📈 How to read this chart:</strong><br>
+                        • Each colored area represents one owner's performance<br>
+                        • The wider the area, the better the performance<br>
+                        • Compare shapes to see strengths & weaknesses
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # 3. Owner Funnel Comparison
+                    st.markdown("### 📉 Owner Funnel Comparison")
+                    
+                    funnel_fig = create_owner_funnel_chart(metric_4, selected_owners_visual)
+                    
+                    if funnel_fig:
+                        st.plotly_chart(funnel_fig, use_container_width=True)
+                        
+                        st.markdown("""
+                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
+                        <strong>📊 How to read this chart:</strong><br>
+                        • Shows how leads move through each owner's pipeline<br>
+                        • Wider bars = more leads at that stage<br>
+                        • Compare conversion rates between owners
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # 4. Owner Performance Grid
+                    st.markdown("### 🥇 Owner Leaderboard")
+                    
+                    performance_grid = create_owner_performance_grid(metric_4[metric_4['Course Owner'].isin(selected_owners_visual)])
+                    
+                    if performance_grid:
+                        st.markdown(performance_grid, unsafe_allow_html=True)
+                    
+                    # 5. Performance Heatmap
+                    st.markdown("### 🔥 Performance Heatmap")
+                    
+                    heatmap_data = create_owner_performance_heatmap(metric_4[metric_4['Course Owner'].isin(selected_owners_visual)])
+                    
+                    if heatmap_data is not None and not heatmap_data.empty:
+                        fig = px.imshow(
+                            heatmap_data,
+                            title="Owner Performance Heatmap",
+                            color_continuous_scale='RdYlGn',
+                            aspect="auto",
+                            labels=dict(color="Performance Score")
+                        )
+                        fig.update_layout(height=400)
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        st.markdown("""
+                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
+                        <strong>🎨 Heatmap Legend:</strong><br>
+                        • 🟢 Green = High performance<br>
+                        • 🟡 Yellow = Medium performance<br>
+                        • 🔴 Red = Low performance<br>
+                        • Compare owners across key metrics
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # 6. Download Owner Visualizations
+                    st.markdown("### 📥 Export Owner Analysis")
+                    
+                    col_vis1, col_vis2 = st.columns(2)
+                    
+                    with col_vis1:
+                        # Create summary of selected owners
+                        owner_summary = metric_4[metric_4['Course Owner'].isin(selected_owners_visual)].copy()
+                        if not owner_summary.empty:
+                            csv_owner = owner_summary.to_csv(index=False)
+                            st.download_button(
+                                "📊 Download Selected Owner Data",
+                                csv_owner,
+                                "owner_performance_summary.csv",
+                                "text/csv",
+                                use_container_width=True
+                            )
+                    
+                    with col_vis2:
+                        if st.button("📸 Capture Visual Report", use_container_width=True):
+                            st.success("Owner visualizations captured! Use browser print (Ctrl+P) to save as PDF")
+                
+                else:
+                    st.info("👈 Please select owners from the dropdown above to see visual analytics")
+            else:
+                st.info("No owner performance data available")
+        
+        # SECTION 6: Volume vs Conversion Matrix
+        with tab6:
+            st.markdown('<div class="section-header"><h3>📉 Volume vs Conversion Matrix</h3></div>', unsafe_allow_html=True)
+            
+            if matrix_data is not None and not matrix_data.empty:
+                # Top 3 Courses by Conversion %
+                conversion_data = []
+                for _, row in filtered_metrics['metric_1'].iterrows():
+                    course = row['Course']
+                    total = row.get('Total', 0)
+                    
+                    if total > 0:
+                        # Get customer count for this course from deals
+                        customer_count = 0
+                        if df_customers is not None and not df_customers.empty:
+                            customer_count = len(df_customers[df_customers['Course/Program'] == course]) if course in df_customers['Course/Program'].values else 0
+                        
+                        conversion_pct = round((customer_count / total * 100), 1)
+                        
+                        conversion_data.append({
+                            'Course': course,
+                            'Conversion %': conversion_pct,
+                            'Total': total,
+                            'Customer': customer_count
+                        })
+                
+                if conversion_data:
+                    conversion_df = pd.DataFrame(conversion_data)
+                    top_conversion_courses = conversion_df.nlargest(3, 'Conversion %')
+                    
+                    conversion_kpis = []
+                    for _, row in top_conversion_courses.iterrows():
+                        course_name = row['Course'][:12] + "..." if len(row['Course']) > 12 else row['Course']
+                        conversion_kpis.append(render_secondary_kpi(
+                            course_name,
+                            f"{row['Conversion %']}%",
+                            f"{row['Total']:,} leads → {row['Customer']:,} customers"
+                        ))
+                    
+                    st.markdown("#### 🥇 Top 3 Courses by Lead→Customer Conversion %")
+                    st.markdown(
+                        render_kpi_row(conversion_kpis, container_class="secondary-kpi-container"),
+                        unsafe_allow_html=True
+                    )
+                
+                # Volume vs Conversion Matrix
+                st.markdown("#### 📊 Volume vs Conversion Matrix (Strategic View)")
+                
+                # Apply conditional formatting for the matrix
+                def color_matrix(val):
+                    if val == "⭐ Star":
+                        return 'background-color: #d4edda; color: #155724; font-weight: bold'
+                    elif val == "📈 Potential":
+                        return 'background-color: #cce5ff; color: #004085; font-weight: bold'
+                    elif "⚠️ Burn" in val:
+                        return 'background-color: #fff3cd; color: #856404; font-weight: bold'
+                    elif val == "❌ Weak":
+                        return 'background-color: #f8d7da; color: #721c24; font-weight: bold'
+                    return ''
+                
+                # Display with styling
+                styled_matrix = matrix_data.style.applymap(color_matrix, subset=['Segment'])
+                
+                col_mat1, col_mat2 = st.columns([3, 1])
+                with col_mat1:
+                    st.dataframe(styled_matrix, use_container_width=True, height=350)
+                
+                with col_mat2:
+                    st.markdown("#### 📊 Matrix Legend")
+                    st.markdown("""
+                    <div style='background-color: #d4edda; padding: 10px; border-radius: 5px; margin: 5px 0;'>
+                    <strong>⭐ Star</strong><br>
+                    High Volume + High Conversion
+                    </div>
+                    
+                    <div style='background-color: #cce5ff; padding: 10px; border-radius: 5px; margin: 5px 0;'>
+                    <strong>📈 Potential</strong><br>
+                    Low Volume + High Conversion
+                    </div>
+                    
+                    <div style='background-color: #fff3cd; padding: 10px; border-radius: 5px; margin: 5px 0;'>
+                    <strong>⚠️ Burn</strong><br>
+                    High Volume + Low Conversion
+                    </div>
+                    
+                    <div style='background-color: #f8d7da; padding: 10px; border-radius: 5px; margin: 5px 0;'>
+                    <strong>❌ Weak</strong><br>
+                    Low Volume + Low Conversion
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("No matrix data available")
+        
+        # SECTION 7: Revenue Analysis
+        with tab7:
+            st.markdown('<div class="section-header"><h3>💸 Revenue Analysis by Course</h3></div>', unsafe_allow_html=True)
+            
+            if revenue_data is not None and not revenue_data.empty:
+                # Top Revenue Course KPI
+                top_revenue = revenue_data.iloc[0] if len(revenue_data) > 0 else None
+                total_revenue = revenue_data['Revenue'].sum()
+                total_customers = revenue_data['Customers'].sum()
+                total_adjustment = revenue_data['Adjustment'].sum()
+                
+                if top_revenue is not None:
+                    st.markdown(
+                        render_kpi_row([
+                            render_kpi("Best Revenue Course", top_revenue['Course'][:20], f"₹{top_revenue['Revenue']:,.0f} revenue", "revenue-kpi"),
+                            render_kpi("Total Revenue", f"₹{total_revenue:,.0f}", f"{total_customers} customers", "kpi-box-green"),
+                            render_kpi("Total Adjustment", f"-₹{abs(total_adjustment):,.0f}", f"Partial payments", "kpi-box-orange"),
+                            render_kpi("Courses with Revenue", f"{len(revenue_data)}", "Active revenue courses", "kpi-box-blue"),
+                        ]),
+                        unsafe_allow_html=True
+                    )
+                
+                # Revenue Distribution Chart
+                st.markdown("#### Revenue Distribution by Course (After Partial Payment Adjustment)")
+                
+                top_revenue_chart = revenue_data.head(10).copy()
+                top_revenue_chart['Course'] = top_revenue_chart['Course'].str.slice(0, 25)
+                
+                fig1 = px.bar(
+                    top_revenue_chart,
+                    x='Course',
+                    y='Revenue',
+                    title='Top 10 Courses by Revenue (Adjusted)',
+                    color='Revenue',
+                    color_continuous_scale='Viridis',
+                    text='Revenue'
+                )
+                fig1.update_traces(
+                    texttemplate='₹%{text:,.0f}',
+                    textposition='outside'
+                )
+                fig1.update_layout(
+                    xaxis_tickangle=-45,
+                    xaxis_title="",
+                    yaxis_title="Revenue (₹)",
+                    height=400,
+                    coloraxis_showscale=False
+                )
+                st.plotly_chart(fig1, use_container_width=True)
+                
+                # Adjustment Analysis
+                st.markdown("#### Partial Payment Adjustment Analysis")
+                
+                adjustment_chart = revenue_data.nlargest(10, 'Adjustment_Pct').copy()
+                if not adjustment_chart.empty:
+                    fig2 = px.bar(
+                        adjustment_chart,
+                        x='Course',
+                        y='Adjustment_Pct',
+                        title='Top 10 Courses by Adjustment %',
+                        color='Adjustment_Pct',
+                        color_continuous_scale='Reds',
+                        text='Adjustment_Pct'
+                    )
+                    fig2.update_traces(
+                        texttemplate='%{text:.1f}%',
+                        textposition='outside'
+                    )
+                    fig2.update_layout(
+                        xaxis_tickangle=-45,
+                        xaxis_title="",
+                        yaxis_title="Adjustment %",
+                        height=400,
+                        coloraxis_showscale=False
+                    )
+                    st.plotly_chart(fig2, use_container_width=True)
+                
+                # Revenue Data Table
+                st.markdown("#### Detailed Revenue Data (With Partial Payment Adjustments)")
+                
+                # Format revenue columns
+                display_revenue = revenue_data.copy()
+                display_revenue['Revenue'] = display_revenue['Revenue'].apply(lambda x: f"₹{x:,.0f}")
+                display_revenue['Original_Revenue'] = display_revenue['Original_Revenue'].apply(lambda x: f"₹{x:,.0f}")
+                display_revenue['Adjustment'] = display_revenue['Adjustment'].apply(lambda x: f"-₹{abs(x):,.0f}" if x < 0 else f"₹{x:,.0f}")
+                display_revenue['Adjustment_Pct'] = display_revenue['Adjustment_Pct'].apply(lambda x: f"{x:.1f}%")
+                display_revenue['Revenue per Customer'] = display_revenue['Revenue per Customer'].apply(lambda x: f"₹{x:,.0f}")
+                
+                st.dataframe(display_revenue, use_container_width=True, height=350)
+                
+                # Download revenue data
+                st.markdown("#### 📥 Export Revenue Data")
+                col_rev1, col_rev2 = st.columns(2)
+                
+                with col_rev1:
+                    csv_rev = revenue_data.to_csv(index=False)
+                    st.download_button(
+                        "📊 Download Revenue Data (CSV)",
+                        csv_rev,
+                        "course_revenue_data.csv",
+                        "text/csv",
+                        use_container_width=True
+                    )
+                
+            else:
+                st.info("No revenue data available. Make sure deals have 'Amount' field populated in HubSpot.")
+        
+        # SECTION 8: COMPARISON VIEW
+        with tab8:
+            st.markdown('<div class="section-header"><h3>🆚 Comparison View</h3></div>', unsafe_allow_html=True)
+            
+            # Comparison controls
+            st.markdown("#### Comparison Configuration")
+            
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                comparison_type = st.selectbox(
+                    "Comparison Type:",
+                    ["Course vs Course", "Owner vs Owner", "Course vs Owner"]
+                )
+            
+            with col_b:
+                # Get available items based on comparison type
+                if comparison_type == "Course vs Course":
+                    items = filtered_metrics['metric_1']['Course'].tolist() if not filtered_metrics['metric_1'].empty else []
+                    items = [str(i).strip() for i in items if str(i).strip() != '']
+                    if items:
+                        item1 = st.selectbox("Select Course 1:", items)
+                        remaining_items = [i for i in items if i != item1]
+                        item2 = st.selectbox("Select Course 2:", ["Select..."] + remaining_items) if remaining_items else None
+                    else:
+                        item1 = None
+                        item2 = None
+                
+                elif comparison_type == "Owner vs Owner":
+                    items = filtered_metrics['metric_2']['Course Owner'].tolist() if not filtered_metrics['metric_2'].empty else []
+                    items = [str(i).strip() for i in items if str(i).strip() != '']
+                    if items:
+                        item1 = st.selectbox("Select Owner 1:", items)
+                        remaining_items = [i for i in items if i != item1]
+                        item2 = st.selectbox("Select Owner 2:", ["Select..."] + remaining_items) if remaining_items else None
+                    else:
+                        item1 = None
+                        item2 = None
+                
+                else:  # Course vs Owner
+                    courses = filtered_metrics['metric_1']['Course'].tolist() if not filtered_metrics['metric_1'].empty else []
+                    courses = [str(c).strip() for c in courses if str(c).strip() != '']
+                    owners = filtered_metrics['metric_2']['Course Owner'].tolist() if not filtered_metrics['metric_2'].empty else []
+                    owners = [str(o).strip() for o in owners if str(o).strip() != '']
+                    
+                    item1 = st.selectbox("Select Course:", ["Select..."] + courses) if courses else None
+                    item2 = st.selectbox("Select Owner:", ["Select..."] + owners) if owners else None
+            
+            # Perform comparison
+            if item1 and item2 and item1 != "Select..." and item2 != "Select...":
+                comparison_results = create_comparison_data(
+                    filtered_df, df_customers, comparison_type, item1, item2
+                )
+                
+                if comparison_results:
+                    st.markdown(f"### Comparing: **{item1}** vs **{item2}**")
+                    
+                    if comparison_results['type'] == 'course_vs_course':
+                        # Create KPI comparison cards
+                        if 'deal_pct1' in comparison_results and 'deal_pct2' in comparison_results:
+                            st.markdown(
+                                render_kpi_row([
+                                    render_kpi(f"{item1[:15]}", f"{comparison_results['deal_pct1']}%", "Lead→Deal %", "kpi-box-blue"),
+                                    render_kpi("VS", "", "Comparison", "kpi-box"),
+                                    render_kpi(f"{item2[:15]}", f"{comparison_results['deal_pct2']}%", "Lead→Deal %", "kpi-box-green"),
+                                ]),
+                                unsafe_allow_html=True
+                            )
+                    
+                    elif comparison_results['type'] == 'owner_vs_owner':
+                        # Create owner comparison KPI cards
+                        if not comparison_results['data1'].empty and not comparison_results['data2'].empty:
+                            owner1_data = comparison_results['data1'].iloc[0] if len(comparison_results['data1']) > 0 else pd.Series()
+                            owner2_data = comparison_results['data2'].iloc[0] if len(comparison_results['data2']) > 0 else pd.Series()
+                            
+                            # Get key metrics
+                            owner1_lead_to_deal = owner1_data.get('Lead→Deal %', 0)
+                            owner1_lead_to_customer = owner1_data.get('Lead→Customer %', 0)
+                            owner2_lead_to_deal = owner2_data.get('Lead→Deal %', 0)
+                            owner2_lead_to_customer = owner2_data.get('Lead→Customer %', 0)
+                            
+                            st.markdown(
+                                render_kpi_row([
+                                    render_kpi(f"{item1[:12]}", f"{owner1_lead_to_deal}%", "Lead→Deal %", "kpi-box-blue"),
+                                    render_kpi("L→D %", "", "Metric", "kpi-box"),
+                                    render_kpi(f"{item2[:12]}", f"{owner2_lead_to_deal}%", "Lead→Deal %", "kpi-box-green"),
+                                ]),
+                                unsafe_allow_html=True
+                            )
+                            
+                            st.markdown(
+                                render_kpi_row([
+                                    render_kpi(f"{item1[:12]}", f"{owner1_lead_to_customer}%", "Lead→Customer %", "kpi-box-purple"),
+                                    render_kpi("L→C %", "", "Metric", "kpi-box"),
+                                    render_kpi(f"{item2[:12]}", f"{owner2_lead_to_customer}%", "Lead→Customer %", "kpi-box-teal"),
+                                ]),
+                                unsafe_allow_html=True
+                            )
+                    
+                    # Original visualization
+                    if comparison_results['type'] == 'course_vs_course':
+                        # ONE VISUAL: Side-by-side bar for % comparison
+                        if 'deal_pct1' in comparison_results and 'deal_pct2' in comparison_results:
+                            comp_data = pd.DataFrame({
+                                'Metric': ['Lead→Deal %'],
+                                item1[:20]: [comparison_results['deal_pct1']],
+                                item2[:20]: [comparison_results['deal_pct2']]
+                            })
+                            
+                            fig = px.bar(
+                                comp_data.melt(id_vars=['Metric'], var_name='Item', value_name='Percentage'),
+                                x='Metric',
+                                y='Percentage',
+                                color='Item',
+                                barmode='group',
+                                title='Performance Comparison (%)',
+                                text='Percentage',
+                                color_discrete_sequence=COLOR_PALETTE
+                            )
+                            fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+                            fig.update_layout(
+                                xaxis_title="",
+                                yaxis_title="Percentage (%)",
+                                height=400
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    elif comparison_results['type'] == 'owner_vs_owner':
+                        # ONE VISUAL: Funnel bar chart
+                        if not comparison_results['data1'].empty and not comparison_results['data2'].empty:
+                            # Get funnel data
+                            funnel_cols = ['Cold', 'Warm', 'Hot', 'Customer']
+                            owner1_data = comparison_results['data1'].iloc[0] if len(comparison_results['data1']) > 0 else pd.Series()
+                            owner2_data = comparison_results['data2'].iloc[0] if len(comparison_results['data2']) > 0 else pd.Series()
+                            
+                            comparison_list = []
+                            for col in funnel_cols:
+                                if col in owner1_data and col in owner2_data:
+                                    comparison_list.append({
+                                        'Stage': col,
+                                        item1[:15]: int(owner1_data[col]),
+                                        item2[:15]: int(owner2_data[col])
+                                    })
+                            
+                            if comparison_list:
+                                radar_df = pd.DataFrame(comparison_list)
+                                melted_df = radar_df.melt(id_vars=['Stage'], var_name='Owner', value_name='Count')
+                                
+                                # Create grouped bar chart instead of radar
+                                fig = px.bar(
+                                    melted_df,
+                                    x='Stage',
+                                    y='Count',
+                                    color='Owner',
+                                    barmode='group',
+                                    title='Funnel Comparison',
+                                    text='Count',
+                                    color_discrete_sequence=COLOR_PALETTE
+                                )
+                                fig.update_layout(
+                                    xaxis_title="Lead Stage",
+                                    yaxis_title="Count",
+                                    height=400
+                                )
+                                fig.update_traces(texttemplate='%{text}', textposition='outside')
+                                st.plotly_chart(fig, use_container_width=True)
+                    
+                    elif comparison_results['type'] == 'course_vs_owner':
+                        # ONE VISUAL: Heatmap
+                        if 'owner_courses' in comparison_results and not comparison_results['owner_courses'].empty:
+                            # Heatmap showing this owner's performance across courses
+                            heatmap_df = comparison_results['owner_courses'].set_index('Course/Program')
+                            
+                            fig = px.imshow(
+                                heatmap_df,
+                                labels=dict(x="Lead Status", y="Course", color="Count"),
+                                aspect="auto",
+                                title=f"{item2}'s Performance by Course",
+                                color_continuous_scale='RdYlGn'
+                            )
+                            fig.update_layout(height=400)
+                            st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Select two items to compare")
     
     else:
-        # Initial state - show instructions
-        st.info("👆 Select a date range and click 'Fetch Data' to load your KPI dashboard.")
-        
-        # Quick stats about what the dashboard does
-        with st.expander("📖 How this dashboard works"):
-            st.markdown("""
-            ### Business Logic Applied:
-            
-            **Total Revenue Calculation (Corrected):**
-            - ✅ Counts full deal amount by default
-            - ✅ **Subtracts partial payments** ONLY if payment date is **OUTSIDE** selected date range
-            - ✅ **Keeps partial payments** if payment date is **INSIDE** selected date range
-            - ✅ Never shows negative revenue (safeguard)
-            
-            **Example:**
-            - Deal Amount: $50,000
-            - Partial Payment: $15,000 on March 15
-            - Dashboard Date Range: April 1-5
-            - **Result:** $35,000 (subtracts March payment)
-            
-            **KPI Metrics:**
-            1. **Total Revenue** - Corrected for partial payments
-            2. **Customer Counts** - Active/Inactive/Pending
-            3. **Avg Revenue/Customer**
-            4. **Course-wise Revenue**
-            5. **Program-wise Revenue**
-            
-            **Data Source:** HubSpot Deals with partial payment tracking
-            """)
+        # Welcome screen
+        st.markdown(
+            """
+            <div style='text-align: center; padding: 3rem;'>
+                <h2>👋 Welcome to HubSpot Business Performance Dashboard</h2>
+                <p style='font-size: 1.1rem; color: #666; margin: 1rem 0;'>
+                    <strong>🎯 100% CLEAN DATA SEPARATION:</strong> Customers ONLY from Deals, NEVER from Leads
+                </p>
+                <p style='font-size: 1rem; color: #666; margin: 1rem 0;'>
+                    <strong>💰 PARTIAL PAYMENT LOGIC:</strong> Revenue shows only money ACTUALLY RECEIVED during selected period
+                </p>
+                
+                <div style='margin-top: 2rem; background-color: #f8f9fa; padding: 2rem; border-radius: 0.5rem;'>
+                    <h4>✅ CRITICAL FIX APPLIED:</h4>
+                    
+                    <div style='text-align: left; background-color: #d4edda; padding: 1rem; border-radius: 0.5rem; margin: 1rem 0;'>
+                        <h5>🔥 THE PROBLEM SOLVED:</h5>
+                        <p>Previous versions incorrectly marked some leads as "Customer"</p>
+                        <p><strong>Example:</strong> Lead status "hot_customer" → "Customer" (WRONG!)</p>
+                        <p><strong>Now:</strong> Lead status "hot_customer" → "Hot" (CORRECT!)</p>
+                        <p><strong>Result:</strong> 0 "Customer" entries in lead data</p>
+                    </div>
+                    
+                    <div style='margin-top: 2rem; padding: 1rem; background-color: #e0e7ff; border-radius: 0.5rem;'>
+                        <h5>💰 PARTIAL PAYMENT LOGIC:</h5>
+                        <p><strong>Business Rule:</strong> Revenue = Deal Amount - Partial Payments <strong>IF</strong> payment date is <strong>OUTSIDE</strong> selected date range</p>
+                        <p><strong>Example 1:</strong> ₹15,000 partial payment on Jan 15 | Dashboard: April 1-5 → <strong>SUBTRACT ₹15,000</strong></p>
+                        <p><strong>Example 2:</strong> ₹15,000 partial payment on April 3 | Dashboard: April 1-5 → <strong>KEEP ₹15,000</strong></p>
+                        <p><strong>Result:</strong> Shows ONLY money received during selected period</p>
+                    </div>
+                    
+                    <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
+                        <h5>🚀 GETTING STARTED:</h5>
+                        <ol style='text-align: left; margin-left: 25%;'>
+                            <li>Configure customer deal stages in sidebar</li>
+                            <li>Set date range</li>
+                            <li>Click "Fetch ALL Data"</li>
+                            <li>Check Data Validation at top of dashboard</li>
+                            <li>All "Customer" entries in leads will be auto-fixed</li>
+                            <li>Revenue automatically adjusted for partial payments</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
 if __name__ == "__main__":
     main()
