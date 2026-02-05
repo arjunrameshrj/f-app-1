@@ -1,3 +1,46 @@
+[file name]: image.png
+[file content begin]
+# Welcome to HubSpot Business Performance Dashboard
+
+## 100% CLEAN DATA SEPARATION: Customers ONLY from Deals, NEVER from Leads
+
+<div style='margin-top: 2rem; background-color: #f8f9fa; padding: 2rem; border-radius: 0.5rem;'>
+    <h4> 📌 CRITICAL FIX APPLIED:</h4>
+</div>
+
+<div style='text-align: left; background-color: #d4edda; padding: 1rem; border-radius: 0.5rem;'>
+    <h5> ⚙️ THE PROBLEM SOLVED:</h5>
+</div>
+
+<p>Previous versions incorrectly marked some leads as "Customer"></p>
+<p><strong>Example:</strong> Lead status "hot_customer" → "Customer" (WRONG!)</p>
+<p><strong>Now:</strong> Lead status "hot_customer" → "Hot" (CORRECT!)</p>
+<p><strong>Result:</strong> 0 "Customer" entries in lead data</p>
+</div>
+
+<div style='margin-top: 2rem; padding: 1rem; background-color: #e0e7ff; border-radius: 0.5rem;'>
+    <h5> 👩 GETTING STARTED:</h5>
+</div>
+
+<ol style='text-align: left; margin-left: 25%;'>
+    <li>Configure customer deal stages in sidebar</li>
+</ol>
+
+<li>Set date range</li>
+<li>Click "Fetch ALL Data"></li>
+
+---
+
+### Configuration
+- **Customer Deal Stage Configuration**
+  - Auto-detected 5 customer stage(s)
+  - Stage 1: Admission Confirmed
+  - Stage ID: closedown
+  - Pipeline: Sales Pipeline (Online)
+  - Use 'Admission Confirmed' as customer stage
+  - Stage 2: Admission Confirmed
+[file content end]
+
 import streamlit as st
 import requests
 import pandas as pd
@@ -2064,21 +2107,6 @@ def create_comparison_data(df_contacts, df_customers, comparison_type, item1, it
             results['item2'] = item2
             results['data1'] = course1_data
             results['data2'] = course2_data
-            
-            # Calculate comparison metrics
-            if not course1_data.empty and not course2_data.empty:
-                # Deal Leads (Cold + Warm + Hot)
-                deal_cols = ['Cold', 'Warm', 'Hot']
-                deal1 = course1_data[deal_cols].sum(axis=1).values[0] if all(col in course1_data.columns for col in deal_cols) else 0
-                total1 = course1_data['Total'].values[0] if 'Total' in course1_data.columns else 1
-                deal_pct1 = (deal1 / total1 * 100) if total1 > 0 else 0
-                
-                deal2 = course2_data[deal_cols].sum(axis=1).values[0] if all(col in course2_data.columns for col in deal_cols) else 0
-                total2 = course2_data['Total'].values[0] if 'Total' in course2_data.columns else 1
-                deal_pct2 = (deal2 / total2 * 100) if total2 > 0 else 0
-                
-                results['deal_pct1'] = round(deal_pct1, 1)
-                results['deal_pct2'] = round(deal_pct2, 1)
     
     elif comparison_type == "Owner vs Owner":
         # Get owner data
@@ -3018,15 +3046,6 @@ def main():
                     
                     if radar_fig:
                         st.plotly_chart(radar_fig, use_container_width=True)
-                        
-                        st.markdown("""
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                        <strong>📈 How to read this chart:</strong><br>
-                        • Each colored area represents one owner's performance<br>
-                        • The wider the area, the better the performance<br>
-                        • Compare shapes to see strengths & weaknesses
-                        </div>
-                        """, unsafe_allow_html=True)
                     
                     # 3. Owner Funnel Comparison
                     st.markdown("### 📉 Owner Funnel Comparison")
@@ -3035,15 +3054,6 @@ def main():
                     
                     if funnel_fig:
                         st.plotly_chart(funnel_fig, use_container_width=True)
-                        
-                        st.markdown("""
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                        <strong>📊 How to read this chart:</strong><br>
-                        • Shows how leads move through each owner's pipeline<br>
-                        • Wider bars = more leads at that stage<br>
-                        • Compare conversion rates between owners
-                        </div>
-                        """, unsafe_allow_html=True)
                     
                     # 4. Owner Performance Grid
                     st.markdown("### 🥇 Owner Leaderboard")
@@ -3068,16 +3078,6 @@ def main():
                         )
                         fig.update_layout(height=400)
                         st.plotly_chart(fig, use_container_width=True)
-                        
-                        st.markdown("""
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                        <strong>🎨 Heatmap Legend:</strong><br>
-                        • 🟢 Green = High performance<br>
-                        • 🟡 Yellow = Medium performance<br>
-                        • 🔴 Red = Low performance<br>
-                        • Compare owners across key metrics
-                        </div>
-                        """, unsafe_allow_html=True)
                     
                     # 6. Download Owner Visualizations
                     st.markdown("### 📥 Export Owner Analysis")
@@ -3333,218 +3333,149 @@ def main():
                     st.markdown(f"### Comparing: **{item1}** vs **{item2}**")
                     
                     if comparison_results['type'] == 'course_vs_course':
-                        # Create KPI comparison cards
-                        if 'deal_pct1' in comparison_results and 'deal_pct2' in comparison_results:
-                            st.markdown(
-                                render_kpi_row([
-                                    render_kpi(f"{item1[:15]}", f"{comparison_results['deal_pct1']}%", "Lead→Deal %", "kpi-box-blue"),
-                                    render_kpi("VS", "", "Comparison", "kpi-box"),
-                                    render_kpi(f"{item2[:15]}", f"{comparison_results['deal_pct2']}%", "Lead→Deal %", "kpi-box-green"),
-                                ]),
-                                unsafe_allow_html=True
-                            )
-                    
-                    elif comparison_results['type'] == 'owner_vs_owner':
-                        # Create owner comparison KPI cards
+                        # Create visualization for course comparison
                         if not comparison_results['data1'].empty and not comparison_results['data2'].empty:
-                            owner1_data = comparison_results['data1'].iloc[0] if len(comparison_results['data1']) > 0 else pd.Series()
-                            owner2_data = comparison_results['data2'].iloc[0] if len(comparison_results['data2']) > 0 else pd.Series()
+                            # Get lead status data
+                            course1_data = comparison_results['data1'].iloc[0] if len(comparison_results['data1']) > 0 else pd.Series()
+                            course2_data = comparison_results['data2'].iloc[0] if len(comparison_results['data2']) > 0 else pd.Series()
                             
-                            # Get key metrics
-                            owner1_lead_to_deal = owner1_data.get('Lead→Deal %', 0)
-                            owner1_lead_to_customer = owner1_data.get('Lead→Customer %', 0)
-                            owner2_lead_to_deal = owner2_data.get('Lead→Deal %', 0)
-                            owner2_lead_to_customer = owner2_data.get('Lead→Customer %', 0)
-                            
-                            st.markdown(
-                                render_kpi_row([
-                                    render_kpi(f"{item1[:12]}", f"{owner1_lead_to_deal}%", "Lead→Deal %", "kpi-box-blue"),
-                                    render_kpi("L→D %", "", "Metric", "kpi-box"),
-                                    render_kpi(f"{item2[:12]}", f"{owner2_lead_to_deal}%", "Lead→Deal %", "kpi-box-green"),
-                                ]),
-                                unsafe_allow_html=True
-                            )
-                            
-                            st.markdown(
-                                render_kpi_row([
-                                    render_kpi(f"{item1[:12]}", f"{owner1_lead_to_customer}%", "Lead→Customer %", "kpi-box-purple"),
-                                    render_kpi("L→C %", "", "Metric", "kpi-box"),
-                                    render_kpi(f"{item2[:12]}", f"{owner2_lead_to_customer}%", "Lead→Customer %", "kpi-box-teal"),
-                                ]),
-                                unsafe_allow_html=True
-                            )
-                    
-                    # Original visualization
-                    if comparison_results['type'] == 'course_vs_course':
-                        # ONE VISUAL: Side-by-side bar for % comparison
-                        if 'deal_pct1' in comparison_results and 'deal_pct2' in comparison_results:
-                            comp_data = pd.DataFrame({
-                                'Metric': ['Lead→Deal %'],
-                                item1[:20]: [comparison_results['deal_pct1']],
-                                item2[:20]: [comparison_results['deal_pct2']]
-                            })
-                            
-                            fig = px.bar(
-                                comp_data.melt(id_vars=['Metric'], var_name='Item', value_name='Percentage'),
-                                x='Metric',
-                                y='Percentage',
-                                color='Item',
-                                barmode='group',
-                                title='Performance Comparison (%)',
-                                text='Percentage',
-                                color_discrete_sequence=COLOR_PALETTE
-                            )
-                            fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-                            fig.update_layout(
-                                xaxis_title="",
-                                yaxis_title="Percentage (%)",
-                                height=400
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-                    
-                    elif comparison_results['type'] == 'owner_vs_owner':
-                        # ONE VISUAL: Funnel bar chart
-                        if not comparison_results['data1'].empty and not comparison_results['data2'].empty:
-                            # Get funnel data
-                            funnel_cols = ['Cold', 'Warm', 'Hot', 'Customer']
-                            owner1_data = comparison_results['data1'].iloc[0] if len(comparison_results['data1']) > 0 else pd.Series()
-                            owner2_data = comparison_results['data2'].iloc[0] if len(comparison_results['data2']) > 0 else pd.Series()
-                            
-                            comparison_list = []
-                            for col in funnel_cols:
-                                if col in owner1_data and col in owner2_data:
-                                    comparison_list.append({
-                                        'Stage': col,
-                                        item1[:15]: int(owner1_data[col]),
-                                        item2[:15]: int(owner2_data[col])
+                            # Create comparison bar chart
+                            comparison_chart_data = []
+                            for status in ['Cold', 'Warm', 'Hot', 'Customer']:
+                                if status in course1_data:
+                                    comparison_chart_data.append({
+                                        'Status': status,
+                                        'Count': course1_data[status],
+                                        'Course': item1[:15]
+                                    })
+                                if status in course2_data:
+                                    comparison_chart_data.append({
+                                        'Status': status,
+                                        'Count': course2_data[status],
+                                        'Course': item2[:15]
                                     })
                             
-                            if comparison_list:
-                                radar_df = pd.DataFrame(comparison_list)
-                                melted_df = radar_df.melt(id_vars=['Stage'], var_name='Owner', value_name='Count')
-                                
-                                # Create grouped bar chart instead of radar
+                            if comparison_chart_data:
+                                comp_df = pd.DataFrame(comparison_chart_data)
                                 fig = px.bar(
-                                    melted_df,
-                                    x='Stage',
+                                    comp_df,
+                                    x='Status',
                                     y='Count',
-                                    color='Owner',
+                                    color='Course',
                                     barmode='group',
-                                    title='Funnel Comparison',
-                                    text='Count',
+                                    title=f'{item1[:15]} vs {item2[:15]} - Lead Status Comparison',
                                     color_discrete_sequence=COLOR_PALETTE
                                 )
-                                fig.update_layout(
-                                    xaxis_title="Lead Stage",
-                                    yaxis_title="Count",
-                                    height=400
+                                st.plotly_chart(fig, use_container_width=True)
+                    
+                    elif comparison_results['type'] == 'owner_vs_owner':
+                        # Create visualization for owner comparison
+                        if not comparison_results['data1'].empty and not comparison_results['data2'].empty:
+                            # Get key metrics for comparison
+                            owner1_data = comparison_results['data1'].iloc[0] if len(comparison_results['data1']) > 0 else pd.Series()
+                            owner2_data = comparison_results['data2'].iloc[0] if len(comparison_state['data2']) > 0 else pd.Series()
+                            
+                            # Create metrics comparison
+                            metrics_to_compare = ['Lead→Customer %', 'Lead→Deal %', 'Customer %']
+                            comparison_metrics = []
+                            
+                            for metric in metrics_to_compare:
+                                if metric in owner1_data:
+                                    comparison_metrics.append({
+                                        'Metric': metric,
+                                        'Value': owner1_data[metric],
+                                        'Owner': item1[:15]
+                                    })
+                                if metric in owner2_data:
+                                    comparison_metrics.append({
+                                        'Metric': metric,
+                                        'Value': owner2_data[metric],
+                                        'Owner': item2[:15]
+                                    })
+                            
+                            if comparison_metrics:
+                                metrics_df = pd.DataFrame(comparison_metrics)
+                                fig = px.bar(
+                                    metrics_df,
+                                    x='Metric',
+                                    y='Value',
+                                    color='Owner',
+                                    barmode='group',
+                                    title=f'{item1[:15]} vs {item2[:15]} - Performance Metrics',
+                                    color_discrete_sequence=COLOR_PALETTE
                                 )
-                                fig.update_traces(texttemplate='%{text}', textposition='outside')
+                                fig.update_layout(yaxis_title="Percentage (%)")
                                 st.plotly_chart(fig, use_container_width=True)
                     
                     elif comparison_results['type'] == 'course_vs_owner':
-                        # ONE VISUAL: Heatmap
+                        # Create visualization for course vs owner comparison
                         if 'owner_courses' in comparison_results and not comparison_results['owner_courses'].empty:
-                            # Heatmap showing this owner's performance across courses
-                            heatmap_df = comparison_results['owner_courses'].set_index('Course/Program')
-                            
-                            fig = px.imshow(
-                                heatmap_df,
-                                labels=dict(x="Lead Status", y="Course", color="Count"),
-                                aspect="auto",
-                                title=f"{item2}'s Performance by Course",
-                                color_continuous_scale='RdYlGn'
-                            )
-                            fig.update_layout(height=400)
-                            st.plotly_chart(fig, use_container_width=True)
+                            # Show owner's performance for selected course
+                            if item1 in comparison_results['owner_courses']['Course/Program'].values:
+                                course_data = comparison_results['owner_courses'][
+                                    comparison_results['owner_courses']['Course/Program'] == item1
+                                ].iloc[0]
+                                
+                                # Get lead status counts
+                                status_data = []
+                                for status in ['Cold', 'Warm', 'Hot', 'Customer']:
+                                    if status in course_data:
+                                        status_data.append({
+                                            'Status': status,
+                                            'Count': course_data[status],
+                                            'Label': f"{item2[:15]} - {item1[:15]}"
+                                        })
+                                
+                                if status_data:
+                                    status_df = pd.DataFrame(status_data)
+                                    fig = px.bar(
+                                        status_df,
+                                        x='Status',
+                                        y='Count',
+                                        title=f"{item2[:15]}'s Performance for {item1[:15]}",
+                                        color='Status',
+                                        color_discrete_sequence=COLOR_PALETTE
+                                    )
+                                    st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("Select two items to compare")
     
     else:
-        # Welcome screen
-        st.markdown(
-            """
-            <div style='text-align: center; padding: 3rem;'>
-                <h2>👋 Welcome to HubSpot Business Performance Dashboard</h2>
-                <p style='font-size: 1.1rem; color: #666; margin: 1rem 0;'>
-                    <strong>🎯 100% CLEAN DATA SEPARATION:</strong> Customers ONLY from Deals, NEVER from Leads
-                </p>
-                
-                <div style='margin-top: 2rem; background-color: #f8f9fa; padding: 2rem; border-radius: 0.5rem;'>
-                    <h4>✅ CRITICAL FIX APPLIED:</h4>
-                    
-                    <div style='text-align: left; background-color: #d4edda; padding: 1rem; border-radius: 0.5rem; margin: 1rem 0;'>
-                        <h5>🔥 THE PROBLEM SOLVED:</h5>
-                        <p>Previous versions incorrectly marked some leads as "Customer"</p>
-                        <p><strong>Example:</strong> Lead status "hot_customer" → "Customer" (WRONG!)</p>
-                        <p><strong>Now:</strong> Lead status "hot_customer" → "Hot" (CORRECT!)</p>
-                        <p><strong>Result:</strong> 0 "Customer" entries in lead data</p>
-                    </div>
-                    
-                    <div style='margin-top: 2rem; padding: 1rem; background-color: #e0e7ff; border-radius: 0.5rem;'>
-                        <h5>🚀 GETTING STARTED:</h5>
-                        <ol style='text-align: left; margin-left: 25%;'>
-                            <li>Configure customer deal stages in sidebar</li>
-                            <li>Set date range</li>
-                            <li>Click "Fetch ALL Data"</li>
-                            <li>Check Data Validation at top of dashboard</li>
-                            <li>All "Customer" entries in leads will be auto-fixed</li>
-                        </ol>
-                    </div>
-                    
-                    <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
-                        <h5>📚 NEW: Course Performance KPI Dashboard</h5>
-                        <p>Now includes comprehensive course-wise performance metrics:</p>
-                        <ul style='text-align: left; margin-left: 25%;'>
-                            <li>✅ Cold/Warm/Hot lead counts by course</li>
-                            <li>✅ Customer conversion % by course</li>
-                            <li>✅ Lead→Deal % by course</li>
-                            <li>✅ Revenue by course</li>
-                            <li>✅ Export as CSV/Excel</li>
-                        </ul>
-                    </div>
-                    
-                    <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
-                        <h5>👑 NEW: Course Owner Visual Analytics</h5>
-                        <p>Beautiful visualizations to understand owner performance:</p>
-                        <div style='display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 15px;'>
-                            <div style='background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 10px; border-radius: 5px;'>
-                                <strong>🏆 Scorecards</strong><br>Visual owner performance cards
-                            </div>
-                            <div style='background: linear-gradient(135deg, #2E8B57, #3CB371); color: white; padding: 10px; border-radius: 5px;'>
-                                <strong>📊 Radar Charts</strong><br>Compare multiple owners
-                            </div>
-                            <div style='background: linear-gradient(135deg, #FF7A59, #FFA500); color: white; padding: 10px; border-radius: 5px;'>
-                                <strong>📉 Funnel Charts</strong><br>Pipeline visualization
-                            </div>
-                            <div style='background: linear-gradient(135deg, #8A2BE2, #9370DB); color: white; padding: 10px; border-radius: 5px;'>
-                                <strong>🔥 Heatmaps</strong><br>Performance at a glance
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
-                        <h5>📉 Volume vs Conversion Matrix (Strategic View)</h5>
-                        <div style='display: flex; justify-content: center; gap: 1rem; margin-top: 1rem;'>
-                            <div style='background-color: #d4edda; padding: 0.5rem 1rem; border-radius: 0.25rem;'>
-                                <strong>⭐ Star</strong><br>High Volume + High Conversion
-                            </div>
-                            <div style='background-color: #cce5ff; padding: 0.5rem 1rem; border-radius: 0.25rem;'>
-                                <strong>📈 Potential</strong><br>Low Volume + High Conversion
-                            </div>
-                            <div style='background-color: #fff3cd; padding: 0.5rem 1rem; border-radius: 0.25rem;'>
-                                <strong>⚠️ Burn</strong><br>High Volume + Low Conversion
-                            </div>
-                            <div style='background-color: #f8d7da; padding: 0.5rem 1rem; border-radius: 0.25rem;'>
-                                <strong>❌ Weak</strong><br>Low Volume + Low Conversion
-                            </div>
-                        </div>
-                    </div>
-                </div>
+        # Welcome screen - SIMPLIFIED VERSION
+        st.markdown("""
+        <div style='text-align: center; padding: 1rem;'>
+            <h2>📊 HubSpot Business Performance Dashboard</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # ✅ CRITICAL FIX BANNER
+        st.markdown("""
+        <div style='margin: 1rem 0; background-color: #f8f9fa; padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #ff7a59;'>
+            <h4 style='margin: 0 0 0.5rem 0;'>✅ CRITICAL FIX APPLIED:</h4>
+            
+            <div style='background-color: #d4edda; padding: 1rem; border-radius: 0.5rem; margin: 0.5rem 0;'>
+                <h5 style='margin: 0 0 0.5rem 0;'>🔥 THE PROBLEM SOLVED:</h5>
+                <p style='margin: 0.25rem 0;'>Previous versions incorrectly marked some leads as "Customer"</p>
+                <p style='margin: 0.25rem 0;'><strong>Example:</strong> Lead status "hot_customer" → "Customer" (WRONG!)</p>
+                <p style='margin: 0.25rem 0;'><strong>Now:</strong> Lead status "hot_customer" → "Hot" (CORRECT!)</p>
+                <p style='margin: 0.25rem 0;'><strong>Result:</strong> 0 "Customer" entries in lead data</p>
             </div>
-            """,
-            unsafe_allow_html=True
-        )
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Simple Instructions
+        st.markdown("""
+        <div style='background-color: #e0e7ff; padding: 1rem; border-radius: 0.5rem; margin: 1rem 0;'>
+            <h5 style='margin: 0 0 0.5rem 0;'>🚀 GETTING STARTED:</h5>
+            <ol style='margin: 0.5rem 0 0.5rem 1rem;'>
+                <li>Configure customer deal stages in sidebar</li>
+                <li>Set date range</li>
+                <li>Click "Fetch ALL Data"</li>
+                <li>Check Data Validation at top of dashboard</li>
+                <li>All "Customer" entries in leads will be auto-fixed</li>
+            </ol>
+        </div>
+        """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
