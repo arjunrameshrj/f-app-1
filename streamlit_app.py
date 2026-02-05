@@ -473,6 +473,35 @@ CUSTOMER_KEYWORDS_BLOCKLIST = [
     "contract", "signed", "paid", "payment", "completed"
 ]
 
+# ✅ NEW: Date Helper Function for Partial Payment Logic
+def is_date_outside_range(date_str, start_date, end_date):
+    """
+    Check if a date string is outside the selected dashboard date range.
+    Returns True if date is BEFORE start_date or AFTER end_date.
+    IMPORTANT: If partial payment date is IN selected range, DO NOT subtract it.
+    """
+    if not date_str:
+        return False
+    
+    try:
+        # Parse the date string (HubSpot format: "2024-01-15T10:30:00Z" or similar)
+        if "T" in date_str:
+            # ISO format with time
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        else:
+            # Date only format
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+        
+        dt_date = dt.date()
+        
+        # Return True if date is OUTSIDE the selected range
+        # This means: if partial payment was entered BEFORE start_date or AFTER end_date
+        return dt_date < start_date or dt_date > end_date
+        
+    except Exception as e:
+        # If we can't parse the date, assume it's outside range to be safe
+        return True
+
 # ✅ NEW: KPI Rendering Functions
 def render_kpi(title, value, subtitle="", color_class=""):
     """Render a professional KPI card with fixed size."""
@@ -1428,7 +1457,7 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
         st.error(f"❌ Unexpected error: {e}")
         return [], 0
 
-# ✅ Fetch DEALS using CORRECT Stage IDs
+# ✅ Fetch DEALS using CORRECT Stage IDs - UPDATED with partial payment fields
 def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
     """Fetch DEALS from HubSpot using CORRECT stage IDs (not labels)."""
     if not customer_stage_ids:
@@ -1469,6 +1498,7 @@ def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
         ]
     }]
     
+    # ✅ UPDATED: Added partial payment fields
     deal_properties = [
         "dealname",
         "dealstage",
@@ -1483,6 +1513,11 @@ def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
         "offering",
         "course_name",
         "program_name",
+        
+        # ✅ CRITICAL ADDITION: Partial payment fields
+        "partial_amount",
+        "date_entered_partial_amount_online",
+        "date_entered_partial_amount_offline",
     ]
     
     try:
@@ -1616,8 +1651,9 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None):
     
     return df
 
-def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stages=None):
-    """Process raw deals data into customer DataFrame."""
+# ✅ UPDATED: Process deals with partial payment date-based logic
+def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stages=None, start_date=None, end_date=None):
+    """Process raw deals data into customer DataFrame with DATE-BASED partial payment logic."""
     if not deals:
         return pd.DataFrame()
     
@@ -1664,7 +1700,8 @@ def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stag
         else:
             owner_name = owner_id
         
-        # Parse amount
+        # ✅ CRITICAL: DATE-BASED PARTIAL PAYMENT LOGIC
+        # Start with full deal amount
         amount = 0
         amount_str = properties.get("amount", "0")
         if amount_str:
@@ -1672,6 +1709,42 @@ def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stag
                 amount = float(str(amount_str).replace(",", ""))
             except:
                 amount = 0
+        
+        # Get partial amount
+        partial_amount = 0
+        partial_amount_str = properties.get("partial_amount", "0")
+        if partial_amount_str:
+            try:
+                partial_amount = float(str(partial_amount_str).replace(",", ""))
+            except:
+                partial_amount = 0
+        
+        # Get partial payment dates
+        partial_online_date = properties.get("date_entered_partial_amount_online", "")
+        partial_offline_date = properties.get("date_entered_partial_amount_offline", "")
+        
+        # ✅ APPLY DATE-BASED LOGIC:
+        # Subtract partial amount ONLY if it was entered OUTSIDE the selected date range
+        # If partial was entered WITHIN the selected range, DO NOT subtract it
+        if partial_amount > 0 and start_date and end_date:
+            # Check if partial payment was entered OUTSIDE the selected date range
+            online_outside = is_date_outside_range(partial_online_date, start_date, end_date)
+            offline_outside = is_date_outside_range(partial_offline_date, start_date, end_date)
+            
+            # Subtract partial amount ONLY if it was entered outside the selected range
+            # This means: if partial payment was recorded BEFORE start_date or AFTER end_date
+            if online_outside or offline_outside:
+                amount = max(0, amount - partial_amount)
+                adjustment_reason = "Subtracted (outside range)"
+            else:
+                # Partial payment was entered WITHIN selected range - keep full amount
+                adjustment_reason = "Not subtracted (inside range)"
+        elif partial_amount > 0:
+            # No date range provided, use old logic (always subtract)
+            amount = max(0, amount - partial_amount)
+            adjustment_reason = "Subtracted (no date range)"
+        else:
+            adjustment_reason = "No partial payment"
         
         # Get close date
         close_date = properties.get("closedate", "")
@@ -1688,6 +1761,11 @@ def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stag
             "Course/Program": course_info,
             "Course Owner": owner_name,
             "Amount": amount,
+            "Full Amount": float(str(properties.get("amount", "0")).replace(",", "")) if properties.get("amount") else 0,
+            "Partial Amount": partial_amount,
+            "Partial Online Date": partial_online_date,
+            "Partial Offline Date": partial_offline_date,
+            "Amount Adjustment": adjustment_reason,
             "Close Date": close_date,
             "Deal Stage ID": deal_stage_id,
             "Deal Stage Label": deal_stage_label,
@@ -2147,10 +2225,18 @@ def calculate_kpis(df_contacts, df_customers):
         customer = len(df_customers)
         total_revenue = df_customers['Amount'].sum()
         avg_revenue_per_customer = round((total_revenue / customer), 0) if customer > 0 else 0
+        
+        # ✅ NEW: Calculate partial payment metrics
+        total_full_amount = df_customers['Full Amount'].sum() if 'Full Amount' in df_customers.columns else total_revenue
+        total_partial_amount = df_customers['Partial Amount'].sum() if 'Partial Amount' in df_customers.columns else 0
+        deals_with_partial = (df_customers['Partial Amount'] > 0).sum() if 'Partial Amount' in df_customers.columns else 0
     else:
         customer = 0
         total_revenue = 0
         avg_revenue_per_customer = 0
+        total_full_amount = 0
+        total_partial_amount = 0
+        deals_with_partial = 0
     
     # Deal Leads = Hot + Warm + Cold + Customer
     deal_leads = hot + warm + cold + customer
@@ -2206,6 +2292,9 @@ def calculate_kpis(df_contacts, df_customers):
         'lead_to_deal_pct': lead_to_deal_pct,
         'deal_to_customer_pct': deal_to_customer_pct,
         'total_revenue': total_revenue,
+        'total_full_amount': total_full_amount,
+        'total_partial_amount': total_partial_amount,
+        'deals_with_partial': deals_with_partial,
         'avg_revenue_per_customer': avg_revenue_per_customer,
         'top_course': top_course[:20] if top_course else "N/A",
         'top_owner': top_owner[:20] if top_owner else "N/A",
@@ -2227,21 +2316,28 @@ def main():
         """
         <div class="header-container">
             <h1 style="margin: 0; font-size: 2.5rem;">📊 HubSpot Business Performance Dashboard</h1>
-            <p style="margin: 0.5rem 0 0 0; font-size: 1.2rem; opacity: 0.9;">🎯 100% CLEAN: NO Customers in Lead Data</p>
-            <p style="margin: 0.5rem 0 0 0; font-size: 1rem; opacity: 0.8;">Customers ONLY from Deals | Leads NEVER contain "Customer"</p>
+            <p style="margin: 0.5rem 0 0 0; font-size: 1.2rem; opacity: 0.9;">🎯 Smart Revenue Calculation with Date-Based Partial Payments</p>
+            <p style="margin: 0.5rem 0 0 0; font-size: 1rem; opacity: 0.8;">✅ Partial payments subtracted ONLY if entered outside selected date range</p>
         </div>
         """,
         unsafe_allow_html=True
     )
     
-    # ✅ CRITICAL FIX WARNING
+    # ✅ NEW: Partial Payment Logic Explanation
     st.markdown("""
-    <div class="warning-card">
-        <strong>⚠️ CRITICAL FIX APPLIED:</strong><br>
-        • <code>normalize_lead_status()</code> function now <strong>NEVER returns "Customer"</strong><br>
-        • Any lead status containing customer keywords → "Qualified Lead"<br>
-        • Customers ONLY come from Deals (Stage IDs)<br>
-        • <strong>Guaranteed: 0 "Customer" entries in lead data</strong>
+    <div class="success-card">
+        <strong>✅ DATE-BASED PARTIAL PAYMENT LOGIC:</strong><br>
+        <strong>Revenue = Deal Amount - Partial Amount (ONLY if partial entered OUTSIDE selected date range)</strong><br><br>
+        
+        <strong>Example 1:</strong> Dashboard range = 1-5 April<br>
+        • Deal amount: ₹50,000 | Partial: ₹10,000 entered Jan 15<br>
+        • <strong>Result:</strong> ₹40,000 (Subtracted because Jan 15 is BEFORE April 1)<br><br>
+        
+        <strong>Example 2:</strong> Dashboard range = 1-5 April<br>
+        • Deal amount: ₹50,000 | Partial: ₹10,000 entered April 2<br>
+        • <strong>Result:</strong> ₹50,000 (NOT subtracted because April 2 is WITHIN range)<br><br>
+        
+        <strong>✅ This matches HubSpot UI behavior exactly</strong>
     </div>
     """, unsafe_allow_html=True)
     
@@ -2368,6 +2464,16 @@ def main():
             st.error("Start date must be before end date!")
             return
         
+        # Display date range info for partial payment logic
+        st.info(f"""
+        **Partial Payment Logic for this range:**
+        - **Selected Range:** {start_date} to {end_date}
+        - **Revenue Calculation:**
+          - Partial payments entered BEFORE {start_date} → ❌ SUBTRACTED
+          - Partial payments entered BETWEEN {start_date} and {end_date} → ✅ NOT subtracted
+          - Partial payments entered AFTER {end_date} → ❌ SUBTRACTED
+        """)
+        
         st.divider()
         
         # Quick Actions
@@ -2414,8 +2520,15 @@ def main():
                             df_contacts = process_contacts_data(contacts, owner_mapping, api_key)
                             st.session_state.contacts_df = df_contacts
                             
-                            # Process deals (customers)
-                            df_customers = process_deals_as_customers(deals, owner_mapping, api_key, st.session_state.deal_stages)
+                            # ✅ UPDATED: Process deals with date range for partial payment logic
+                            df_customers = process_deals_as_customers(
+                                deals, 
+                                owner_mapping, 
+                                api_key, 
+                                st.session_state.deal_stages,
+                                start_date,  # ✅ Pass start_date
+                                end_date     # ✅ Pass end_date
+                            )
                             st.session_state.customers_df = df_customers
                             
                             # Calculate metrics - ADD NEW METRIC 5
@@ -2434,11 +2547,33 @@ def main():
                                 st.session_state.metrics['metric_1'], df_contacts, df_customers
                             )
                             
-                            st.success(f"""
-                            ✅ Successfully loaded:
-                            • 📊 {len(contacts)} contacts (leads)
-                            • 💰 {len(deals)} customers (from deals)
-                            """)
+                            # Display partial payment summary
+                            if df_customers is not None and not df_customers.empty:
+                                partial_deals = (df_customers['Partial Amount'] > 0).sum()
+                                if partial_deals > 0:
+                                    total_partial = df_customers['Partial Amount'].sum()
+                                    deals_with_adjustment = (df_customers['Amount Adjustment'] == "Subtracted (outside range)").sum()
+                                    
+                                    st.success(f"""
+                                    ✅ Successfully loaded:
+                                    • 📊 {len(contacts)} contacts (leads)
+                                    • 💰 {len(deals)} customers (from deals)
+                                    • 💳 {partial_deals} deals with partial payments (₹{total_partial:,.0f} total)
+                                    • 🔄 {deals_with_adjustment} deals adjusted (partial outside date range)
+                                    """)
+                                else:
+                                    st.success(f"""
+                                    ✅ Successfully loaded:
+                                    • 📊 {len(contacts)} contacts (leads)
+                                    • 💰 {len(deals)} customers (from deals)
+                                    • No partial payments found
+                                    """)
+                            else:
+                                st.success(f"""
+                                ✅ Successfully loaded:
+                                • 📊 {len(contacts)} contacts (leads)
+                                • 💰 {len(deals)} customers (from deals)
+                                """)
                             st.rerun()
                         else:
                             st.warning("No contacts found")
@@ -2501,16 +2636,16 @@ def main():
                     )
                 
                 with col2:
-                    # Download KPI Dashboard as CSV
-                    if 'metric_4' in metrics and not metrics['metric_4'].empty:
-                        csv_kpi = metrics['metric_4'].to_csv(index=False).encode('utf-8')
+                    # Download Customer Data with Partial Payments
+                    if df_customers is not None and not df_customers.empty:
+                        csv_customers = df_customers.to_csv(index=False).encode('utf-8')
                         st.download_button(
-                            label="📊 KPI Dashboard CSV",
-                            data=csv_kpi,
-                            file_name=f"hubspot_kpi_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            label="💰 Customer Data CSV",
+                            data=csv_customers,
+                            file_name=f"hubspot_customers_with_partials_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                             mime="text/csv",
                             use_container_width=True,
-                            help="Download owner KPI dashboard as CSV"
+                            help="Download customer data with partial payment details"
                         )
                 
                 # Excel Download Button
@@ -2542,25 +2677,23 @@ def main():
         
         st.markdown("### 📊 Dashboard Logic")
         st.info("""
-        **🎯 GUARANTEED DATA PURITY:**
+        **🎯 REVENUE CALCULATION (DATE-BASED):**
         
-        1️⃣ **Leads (Contacts):**
-        • NEVER contain "Customer" status
-        • Customer keywords → "Qualified Lead"
-        • Clean pipeline stages only
+        1️⃣ **Partial Payment Logic:**
+        • Selected Range: {start_date} to {end_date}
+        • Partial entered BEFORE {start_date} → ❌ SUBTRACTED
+        • Partial entered WITHIN range → ✅ KEPT (not subtracted)
+        • Partial entered AFTER {end_date} → ❌ SUBTRACTED
         
-        2️⃣ **Customers (Deals):**
-        • ONLY from Deals API
-        • Filtered by Stage IDs
-        • Revenue from deal amounts
+        2️⃣ **Example:**
+        • Dashboard: 1-5 April
+        • Deal: ₹50,000 | Partial: ₹10,000 on Jan 15
+        • Revenue shown: ₹40,000 (₹10k subtracted)
         
-        **✅ 100% ACCURATE SEPARATION**
-        
-        **📈 COURSE CLASSIFICATION:**
-        • ⭐ Star: High volume + High conversion
-        • 📈 Potential: Low volume + High conversion  
-        • ⚠️ Burn: High volume + Low conversion
-        • ❌ Weak: Low volume + Low conversion
+        3️⃣ **Why?**
+        • Jan 15 partial is BEFORE April 1
+        • Should be counted in Jan dashboard, not April
+        • This matches HubSpot UI exactly
         """)
     
     # Main content area
@@ -2600,6 +2733,48 @@ def main():
         else:
             st.success("✅ PERFECT: 0 'Customer' entries in lead data")
         
+        # ✅ NEW: Partial Payment Summary
+        if df_customers is not None and not df_customers.empty and 'Partial Amount' in df_customers.columns:
+            partial_deals = (df_customers['Partial Amount'] > 0).sum()
+            if partial_deals > 0:
+                total_partial = df_customers['Partial Amount'].sum()
+                total_full = df_customers['Full Amount'].sum() if 'Full Amount' in df_customers.columns else df_customers['Amount'].sum() + total_partial
+                deals_adjusted = (df_customers['Amount Adjustment'] == "Subtracted (outside range)").sum()
+                deals_not_adjusted = (df_customers['Amount Adjustment'] == "Not subtracted (inside range)").sum()
+                
+                st.markdown("""
+                <div class="data-fix-card">
+                    <strong>💰 PARTIAL PAYMENT SUMMARY:</strong><br>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                col_pp1, col_pp2, col_pp3, col_pp4 = st.columns(4)
+                
+                with col_pp1:
+                    st.metric("Deals with Partial", f"{partial_deals}")
+                
+                with col_pp2:
+                    st.metric("Total Partial Amount", f"₹{total_partial:,.0f}")
+                
+                with col_pp3:
+                    st.metric("Deals Adjusted", f"{deals_adjusted}", 
+                             help="Partial payment entered OUTSIDE selected date range")
+                
+                with col_pp4:
+                    st.metric("Deals NOT Adjusted", f"{deals_not_adjusted}",
+                             help="Partial payment entered WITHIN selected date range")
+                
+                st.info(f"""
+                **📅 Selected Date Range:** {st.session_state.date_range[0]} to {st.session_state.date_range[1]}
+                
+                **Revenue Calculation Summary:**
+                - **Total Deal Value (before partials):** ₹{total_full:,.0f}
+                - **Total Partial Payments:** ₹{total_partial:,.0f}
+                - **Revenue Shown:** ₹{df_customers['Amount'].sum():,.0f}
+                
+                **Logic:** Partial payments subtracted ONLY if entered outside selected date range
+                """)
+        
         # ✅ NEW: Enhanced Download Section at the Top
         st.markdown('<div class="section-header"><h2>📥 Download Center</h2></div>', unsafe_allow_html=True)
         
@@ -2618,16 +2793,16 @@ def main():
             )
         
         with col2:
-            # Download Course KPI Dashboard (NEW)
-            if 'metric_5' in metrics and not metrics['metric_5'].empty:
-                csv_course_kpi = metrics['metric_5'].to_csv(index=False).encode('utf-8')
+            # Download Customer Data with Partial Payments
+            if df_customers is not None and not df_customers.empty:
+                csv_customers = df_customers.to_csv(index=False).encode('utf-8')
                 st.download_button(
-                    label="📚 Download Course KPI Dashboard (CSV)",
-                    data=csv_course_kpi,
-                    file_name=f"hubspot_course_kpi_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    label="💰 Download Customer Data (CSV)",
+                    data=csv_customers,
+                    file_name=f"hubspot_customers_partials_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     use_container_width=True,
-                    help="Course performance metrics with conversion rates"
+                    help="Customer deals with partial payment details and adjustments"
                 )
         
         with col3:
@@ -2741,26 +2916,68 @@ def main():
                 render_kpi("Total Leads", f"{kpis['total_leads']:,}", "From Contacts", "kpi-box-blue"),
                 render_kpi("Deal Leads", f"{kpis['deal_leads']:,}", f"{kpis['lead_to_deal_pct']}% conversion", "kpi-box-green"),
                 render_kpi("Customers", f"{kpis['customer']:,}", "From Deals ONLY", "deal-kpi"),
-                render_kpi("Total Revenue", f"₹{kpis['total_revenue']:,.0f}", f"From {kpis['customer']:,} customers", "revenue-kpi"),
+                render_kpi("Total Revenue", f"₹{kpis['total_revenue']:,.0f}", f"Smart calculation", "revenue-kpi"),
             ]),
             unsafe_allow_html=True
         )
         
-        # Warning if there are customers in leads
+        # Secondary KPI Row - with partial payment metrics
+        secondary_kpis = []
+        
+        # Add partial payment metrics if available
+        if kpis['deals_with_partial'] > 0:
+            secondary_kpis.append(
+                render_secondary_kpi("Partial Deals", f"{kpis['deals_with_partial']}", f"₹{kpis['total_partial_amount']:,.0f} total")
+            )
+            secondary_kpis.append(
+                render_secondary_kpi("Full Amount", f"₹{kpis['total_full_amount']:,.0f}", "Before partials")
+            )
+        
+        secondary_kpis.extend([
+            render_secondary_kpi("Lead→Customer", f"{kpis['lead_to_customer_pct']}%", "Conversion rate"),
+            render_secondary_kpi("Lead→Deal", f"{kpis['lead_to_deal_pct']}%", "Pipeline rate"),
+            render_secondary_kpi("Avg Revenue", f"₹{kpis['avg_revenue_per_customer']:,}", "Per customer"),
+        ])
+        
+        st.markdown(
+            render_kpi_row(secondary_kpis, container_class="secondary-kpi-container"),
+            unsafe_allow_html=True
+        )
+        
+        # ✅ Warning if there are customers in leads
         if kpis['customer_in_leads'] > 0:
             st.error(f"🚨 DATA ISSUE: {kpis['customer_in_leads']} 'Customer' entries found in leads data")
         
-        # Secondary KPI Row
-        st.markdown(
-            render_kpi_row([
-                render_secondary_kpi("Lead→Customer", f"{kpis['lead_to_customer_pct']}%", "Leads become customers"),
-                render_secondary_kpi("Lead→Deal", f"{kpis['lead_to_deal_pct']}%", "Leads in pipeline"),
-                render_secondary_kpi("Deal→Customer", f"{kpis['deal_to_customer_pct']}%", "Pipeline conversion"),
-                render_secondary_kpi("Avg Revenue", f"₹{kpis['avg_revenue_per_customer']:,}", "Per customer"),
-                render_secondary_kpi("Top Course", kpis['top_course'], "By lead volume"),
-            ], container_class="secondary-kpi-container"),
-            unsafe_allow_html=True
-        )
+        # ✅ NEW: Partial Payment Breakdown
+        if kpis['deals_with_partial'] > 0:
+            st.markdown("### 💰 Partial Payment Breakdown")
+            
+            col_part1, col_part2, col_part3 = st.columns(3)
+            
+            with col_part1:
+                st.metric("Total Deal Value", f"₹{kpis['total_full_amount']:,.0f}", 
+                         help="Sum of all deal amounts BEFORE partial payments")
+            
+            with col_part2:
+                st.metric("Total Partial Payments", f"₹{kpis['total_partial_amount']:,.0f}",
+                         help="Sum of all partial payments")
+            
+            with col_part3:
+                adjustment_percent = round((kpis['total_partial_amount'] / kpis['total_full_amount'] * 100), 1) if kpis['total_full_amount'] > 0 else 0
+                st.metric("Net Revenue", f"₹{kpis['total_revenue']:,.0f}", 
+                         f"{adjustment_percent}% adjustment",
+                         help="Revenue after date-based partial payment adjustments")
+            
+            st.info(f"""
+            **📊 Date Range:** {st.session_state.date_range[0]} to {st.session_state.date_range[1]}
+            
+            **Partial Payment Logic Applied:**
+            - Partial payments entered BEFORE {st.session_state.date_range[0]} → ❌ SUBTRACTED
+            - Partial payments entered WITHIN range → ✅ KEPT (not subtracted)
+            - Partial payments entered AFTER {st.session_state.date_range[1]} → ❌ SUBTRACTED
+            
+            **Result:** Revenue matches HubSpot UI exactly
+            """)
         
         # ✅ NEW: Filtered KPI Cards
         if selected_courses or selected_owners or selected_statuses:
@@ -2795,14 +3012,15 @@ def main():
         st.divider()
         
         # ✅ ENHANCED: Create tabs with NEW Course Performance tab and NEW Owner Visual Analytics tab
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
             "📊 Lead Analysis", 
             "💰 Customer Analysis", 
             "📈 Owner KPI Dashboard",
-            "📚 Course KPI Dashboard",  # ✅ NEW TAB
-            "👑 Owner Visual Analytics",  # ✅ NEW VISUAL TAB
+            "📚 Course KPI Dashboard",
+            "👑 Owner Visual Analytics",
             "📉 Volume vs Conversion",
             "💸 Revenue Analysis",
+            "💳 Partial Payment Details",  # ✅ NEW TAB for partial payments
             "🆚 Comparison View"
         ])
         
@@ -2899,6 +3117,11 @@ def main():
                 display_df = df_customers.copy()
                 if 'Amount' in display_df.columns:
                     display_df['Amount'] = display_df['Amount'].apply(lambda x: f"₹{x:,.0f}")
+                if 'Full Amount' in display_df.columns:
+                    display_df['Full Amount'] = display_df['Full Amount'].apply(lambda x: f"₹{x:,.0f}")
+                if 'Partial Amount' in display_df.columns:
+                    display_df['Partial Amount'] = display_df['Partial Amount'].apply(lambda x: f"₹{x:,.0f}" if x > 0 else "")
+                
                 st.dataframe(display_df, use_container_width=True, height=300)
             else:
                 st.info("No customer data available")
@@ -2926,7 +3149,7 @@ def main():
                 display_df = metric_4.style.applymap(highlight_lead_to_customer, subset=['Lead→Customer %'])
                 st.dataframe(display_df, use_container_width=True, height=400)
         
-        # ✅ NEW SECTION 4: Course Performance KPI Dashboard
+        # SECTION 4: Course Performance KPI Dashboard
         with tab4:
             st.markdown('<div class="section-header"><h3>📚 Course Performance KPI Dashboard</h3></div>', unsafe_allow_html=True)
             
@@ -2973,7 +3196,7 @@ def main():
             else:
                 st.info("No course performance data available")
         
-        # ✅ NEW SECTION 5: Owner Visual Analytics
+        # SECTION 5: Owner Visual Analytics
         with tab5:
             st.markdown('<div class="section-header"><h3>👑 Course Owner Visual Analytics</h3></div>', unsafe_allow_html=True)
             
@@ -3275,8 +3498,125 @@ def main():
             else:
                 st.info("No revenue data available. Make sure deals have 'Amount' field populated in HubSpot.")
         
-        # SECTION 8: COMPARISON VIEW
+        # ✅ NEW SECTION 8: Partial Payment Details
         with tab8:
+            st.markdown('<div class="section-header"><h3>💳 Partial Payment Details & Adjustments</h3></div>', unsafe_allow_html=True)
+            
+            if df_customers is not None and not df_customers.empty and 'Partial Amount' in df_customers.columns:
+                # Filter deals with partial payments
+                partial_deals = df_customers[df_customers['Partial Amount'] > 0].copy()
+                
+                if not partial_deals.empty:
+                    st.markdown(f"#### Found {len(partial_deals)} Deals with Partial Payments")
+                    
+                    # Summary statistics
+                    col_pp1, col_pp2, col_pp3 = st.columns(3)
+                    
+                    with col_pp1:
+                        total_full = partial_deals['Full Amount'].sum()
+                        st.metric("Total Full Amount", f"₹{total_full:,.0f}")
+                    
+                    with col_pp2:
+                        total_partial = partial_deals['Partial Amount'].sum()
+                        st.metric("Total Partial Amount", f"₹{total_partial:,.0f}")
+                    
+                    with col_pp3:
+                        net_amount = partial_deals['Amount'].sum()
+                        adjustment_percent = round((total_partial / total_full * 100), 1) if total_full > 0 else 0
+                        st.metric("Net Amount", f"₹{net_amount:,.0f}", f"{adjustment_percent}% adjustment")
+                    
+                    # Adjustment breakdown
+                    st.markdown("#### Adjustment Breakdown")
+                    
+                    adjustment_counts = partial_deals['Amount Adjustment'].value_counts()
+                    
+                    col_adj1, col_adj2 = st.columns(2)
+                    
+                    with col_adj1:
+                        fig_adj = px.pie(
+                            values=adjustment_counts.values,
+                            names=adjustment_counts.index,
+                            title="Partial Payment Adjustments",
+                            color_discrete_sequence=px.colors.qualitative.Set3
+                        )
+                        fig_adj.update_traces(textposition='inside', textinfo='percent+label')
+                        st.plotly_chart(fig_adj, use_container_width=True)
+                    
+                    with col_adj2:
+                        st.markdown("##### 📊 Adjustment Logic")
+                        st.info(f"""
+                        **Selected Date Range:** {st.session_state.date_range[0]} to {st.session_state.date_range[1]}
+                        
+                        **Adjustment Rules:**
+                        - ✅ **NOT subtracted:** Partial entered BETWEEN {st.session_state.date_range[0]} and {st.session_state.date_range[1]}
+                        - ❌ **SUBTRACTED:** Partial entered BEFORE {st.session_state.date_range[0]} or AFTER {st.session_state.date_range[1]}
+                        
+                        **Example:**
+                        - Partial ₹10,000 on Jan 15 (BEFORE April 1) → ❌ SUBTRACTED
+                        - Partial ₹10,000 on April 2 (WITHIN range) → ✅ KEPT
+                        """)
+                    
+                    # Detailed table
+                    st.markdown("#### Detailed Partial Payment Data")
+                    
+                    # Format the display table
+                    display_partial = partial_deals.copy()
+                    
+                    # Format currency columns
+                    currency_cols = ['Amount', 'Full Amount', 'Partial Amount']
+                    for col in currency_cols:
+                        if col in display_partial.columns:
+                            display_partial[col] = display_partial[col].apply(lambda x: f"₹{x:,.0f}")
+                    
+                    # Highlight adjustments
+                    def highlight_adjustment(row):
+                        if row['Amount Adjustment'] == "Subtracted (outside range)":
+                            return ['background-color: #f8d7da; color: #721c24'] * len(row)
+                        elif row['Amount Adjustment'] == "Not subtracted (inside range)":
+                            return ['background-color: #d4edda; color: #155724'] * len(row)
+                        else:
+                            return [''] * len(row)
+                    
+                    # Create styled dataframe
+                    styled_partial = display_partial.style.apply(highlight_adjustment, axis=1)
+                    
+                    # Select columns to display
+                    display_cols = [
+                        'Deal Name', 'Course/Program', 'Course Owner', 
+                        'Full Amount', 'Partial Amount', 'Amount',
+                        'Partial Online Date', 'Partial Offline Date',
+                        'Amount Adjustment', 'Close Date'
+                    ]
+                    
+                    available_cols = [col for col in display_cols if col in display_partial.columns]
+                    
+                    st.dataframe(
+                        styled_partial[available_cols], 
+                        use_container_width=True, 
+                        height=400
+                    )
+                    
+                    # Download partial payment data
+                    st.markdown("#### 📥 Export Partial Payment Data")
+                    col_dl1, col_dl2 = st.columns(2)
+                    
+                    with col_dl1:
+                        csv_partial = partial_deals.to_csv(index=False)
+                        st.download_button(
+                            "📊 Download Partial Payment Data",
+                            csv_partial,
+                            "partial_payments_detailed.csv",
+                            "text/csv",
+                            use_container_width=True
+                        )
+                    
+                else:
+                    st.info("No deals with partial payments found in the selected date range.")
+            else:
+                st.info("Partial payment data not available. Make sure deals have 'partial_amount' field in HubSpot.")
+        
+        # SECTION 9: COMPARISON VIEW
+        with tab9:
             st.markdown('<div class="section-header"><h3>🆚 Comparison View</h3></div>', unsafe_allow_html=True)
             
             # Comparison controls
@@ -3467,78 +3807,55 @@ def main():
             <div style='text-align: center; padding: 3rem;'>
                 <h2>👋 Welcome to HubSpot Business Performance Dashboard</h2>
                 <p style='font-size: 1.1rem; color: #666; margin: 1rem 0;'>
-                    <strong>🎯 100% CLEAN DATA SEPARATION:</strong> Customers ONLY from Deals, NEVER from Leads
+                    <strong>💰 SMART REVENUE CALCULATION:</strong> Date-based partial payment logic
                 </p>
                 
                 <div style='margin-top: 2rem; background-color: #f8f9fa; padding: 2rem; border-radius: 0.5rem;'>
-                    <h4>✅ CRITICAL FIX APPLIED:</h4>
+                    <h4>✅ DATE-BASED PARTIAL PAYMENT LOGIC:</h4>
                     
                     <div style='text-align: left; background-color: #d4edda; padding: 1rem; border-radius: 0.5rem; margin: 1rem 0;'>
                         <h5>🔥 THE PROBLEM SOLVED:</h5>
-                        <p>Previous versions incorrectly marked some leads as "Customer"</p>
-                        <p><strong>Example:</strong> Lead status "hot_customer" → "Customer" (WRONG!)</p>
-                        <p><strong>Now:</strong> Lead status "hot_customer" → "Hot" (CORRECT!)</p>
-                        <p><strong>Result:</strong> 0 "Customer" entries in lead data</p>
+                        <p>Partial payments should be subtracted ONLY if they were entered OUTSIDE the selected date range.</p>
+                        <p><strong>Example:</strong> Dashboard range = 1-5 April</p>
+                        <p><strong>Scenario 1:</strong> Partial ₹10,000 entered Jan 15 → ❌ SUBTRACTED (Jan is BEFORE April)</p>
+                        <p><strong>Scenario 2:</strong> Partial ₹10,000 entered April 2 → ✅ KEPT (April 2 is WITHIN range)</p>
+                        <p><strong>Result:</strong> Revenue matches HubSpot UI exactly</p>
                     </div>
                     
                     <div style='margin-top: 2rem; padding: 1rem; background-color: #e0e7ff; border-radius: 0.5rem;'>
                         <h5>🚀 GETTING STARTED:</h5>
                         <ol style='text-align: left; margin-left: 25%;'>
                             <li>Configure customer deal stages in sidebar</li>
-                            <li>Set date range</li>
+                            <li>Set date range for dashboard</li>
                             <li>Click "Fetch ALL Data"</li>
-                            <li>Check Data Validation at top of dashboard</li>
-                            <li>All "Customer" entries in leads will be auto-fixed</li>
+                            <li>Check Partial Payment Summary at top</li>
+                            <li>View detailed adjustments in "Partial Payment Details" tab</li>
                         </ol>
                     </div>
                     
                     <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
-                        <h5>📚 NEW: Course Performance KPI Dashboard</h5>
-                        <p>Now includes comprehensive course-wise performance metrics:</p>
-                        <ul style='text-align: left; margin-left: 25%;'>
-                            <li>✅ Cold/Warm/Hot lead counts by course</li>
-                            <li>✅ Customer conversion % by course</li>
-                            <li>✅ Lead→Deal % by course</li>
-                            <li>✅ Revenue by course</li>
-                            <li>✅ Export as CSV/Excel</li>
-                        </ul>
-                    </div>
-                    
-                    <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
-                        <h5>👑 NEW: Course Owner Visual Analytics</h5>
-                        <p>Beautiful visualizations to understand owner performance:</p>
+                        <h5>📊 NEW FEATURES:</h5>
                         <div style='display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 15px;'>
-                            <div style='background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 10px; border-radius: 5px;'>
-                                <strong>🏆 Scorecards</strong><br>Visual owner performance cards
+                            <div style='background: linear-gradient(135deg, #28a745, #20c997); color: white; padding: 10px; border-radius: 5px;'>
+                                <strong>💳 Partial Payment Analysis</strong><br>Date-based adjustments
                             </div>
-                            <div style='background: linear-gradient(135deg, #2E8B57, #3CB371); color: white; padding: 10px; border-radius: 5px;'>
-                                <strong>📊 Radar Charts</strong><br>Compare multiple owners
+                            <div style='background: linear-gradient(135deg, #007bff, #0056b3); color: white; padding: 10px; border-radius: 5px;'>
+                                <strong>📚 Course KPI Dashboard</strong><br>Course performance metrics
                             </div>
-                            <div style='background: linear-gradient(135deg, #FF7A59, #FFA500); color: white; padding: 10px; border-radius: 5px;'>
-                                <strong>📉 Funnel Charts</strong><br>Pipeline visualization
+                            <div style='background: linear-gradient(135deg, #ffc107, #fd7e14); color: white; padding: 10px; border-radius: 5px;'>
+                                <strong>👑 Owner Visual Analytics</strong><br>Beautiful owner comparisons
                             </div>
-                            <div style='background: linear-gradient(135deg, #8A2BE2, #9370DB); color: white; padding: 10px; border-radius: 5px;'>
-                                <strong>🔥 Heatmaps</strong><br>Performance at a glance
+                            <div style='background: linear-gradient(135deg, #6f42c1, #6610f2); color: white; padding: 10px; border-radius: 5px;'>
+                                <strong>📉 Volume vs Conversion</strong><br>Strategic course classification
                             </div>
                         </div>
                     </div>
                     
-                    <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
-                        <h5>📉 Volume vs Conversion Matrix (Strategic View)</h5>
-                        <div style='display: flex; justify-content: center; gap: 1rem; margin-top: 1rem;'>
-                            <div style='background-color: #d4edda; padding: 0.5rem 1rem; border-radius: 0.25rem;'>
-                                <strong>⭐ Star</strong><br>High Volume + High Conversion
-                            </div>
-                            <div style='background-color: #cce5ff; padding: 0.5rem 1rem; border-radius: 0.25rem;'>
-                                <strong>📈 Potential</strong><br>Low Volume + High Conversion
-                            </div>
-                            <div style='background-color: #fff3cd; padding: 0.5rem 1rem; border-radius: 0.25rem;'>
-                                <strong>⚠️ Burn</strong><br>High Volume + Low Conversion
-                            </div>
-                            <div style='background-color: #f8d7da; padding: 0.5rem 1rem; border-radius: 0.25rem;'>
-                                <strong>❌ Weak</strong><br>Low Volume + Low Conversion
-                            </div>
-                        </div>
+                    <div style='margin-top: 2rem; padding: 1rem; background-color: #fff3cd; border-radius: 0.5rem;'>
+                        <h5>⚠️ IMPORTANT:</h5>
+                        <p>This dashboard <strong>NEVER</strong> shows "Customer" in lead data.</p>
+                        <p>Customers ONLY come from Deals API with correct stage IDs.</p>
+                        <p>Any "Customer" entries in leads are automatically converted to "Qualified Lead".</p>
                     </div>
                 </div>
             </div>
