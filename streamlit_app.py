@@ -414,7 +414,7 @@ st.markdown("""
         border: 1px solid #dee2e6;
     }
     
-    /* ✅ NEW: Lead Status Metrics Styles */
+    /* ✅ NEW: Lead Status Metrics Styles - FIXED */
     .lead-status-metric {
         background: linear-gradient(135deg, #ffffff, #f8f9fa);
         border-radius: 10px;
@@ -488,6 +488,21 @@ st.markdown("""
         background: linear-gradient(135deg, #fffcf0, #fff3cd);
     }
     
+    .status-card-upselling {
+        border-left-color: #9c27b0;
+        background: linear-gradient(135deg, #f3e5f5, #e1bee7);
+    }
+    
+    .status-card-course-shifting {
+        border-left-color: #795548;
+        background: linear-gradient(135deg, #efebe9, #d7ccc8);
+    }
+    
+    .status-card-unknown {
+        border-left-color: #607d8b;
+        background: linear-gradient(135deg, #eceff1, #cfd8dc);
+    }
+    
     .status-count {
         font-size: 24px;
         font-weight: bold;
@@ -541,7 +556,7 @@ LEAD_STATUS_MAP = {
     "neutral_prospect": "Cold",
     "prospect": "Warm",  
     "hot_prospect": "Hot",
-    "not_connected": "Not Connected (NC)",
+    "not_connected": "Not Connected",
     "not_interested": "Not Interested", 
     "unqualified": "Not Qualified",
     "not_qualified": "Not Qualified",
@@ -551,7 +566,9 @@ LEAD_STATUS_MAP = {
     None: "Unknown",
     "unknown": "Unknown",
     "other": "Unknown",
-    "qualified_lead": "Qualified Lead"
+    "qualified_lead": "Qualified Lead",
+    "upselling": "Upselling",
+    "course_shifting": "Course Shifting"
 }
 
 # ✅ CRITICAL FIX: List of terms that should NEVER become "Customer" in leads
@@ -591,7 +608,7 @@ def render_kpi_row(kpis, container_class="kpi-container"):
     </div>
     """
 
-# ✅ NEW: Lead Status Count Display Function
+# ✅ NEW: Lead Status Count Display Function - FIXED
 def render_lead_status_metrics(status_counts, total_leads):
     """Render lead status metrics in a visually appealing format."""
     if status_counts.empty or total_leads == 0:
@@ -605,16 +622,18 @@ def render_lead_status_metrics(status_counts, total_leads):
         "New Lead": {"class": "status-card-new", "icon": "🆕"},
         "Qualified Lead": {"class": "status-card-qualified", "icon": "✅"},
         "Not Interested": {"class": "status-card-not-interested", "icon": "🚫"},
-        "Not Connected (NC)": {"class": "status-card-not-connected", "icon": "📞"},
+        "Not Connected": {"class": "status-card-not-connected", "icon": "📞"},
         "Not Qualified": {"class": "status-card-not-qualified", "icon": "📊"},
         "Duplicate": {"class": "status-card-duplicate", "icon": "📋"},
-        "Unknown": {"class": "", "icon": "❓"}
+        "Upselling": {"class": "status-card-upselling", "icon": "📈"},
+        "Course Shifting": {"class": "status-card-course-shifting", "icon": "🔄"},
+        "Unknown": {"class": "status-card-unknown", "icon": "❓"}
     }
     
     html = """
     <div class="lead-status-metric">
         <div class="lead-status-header">
-            <h3 style="margin: 0; font-size: 1.2rem;">📊 Lead Status Breakdown</h3>
+            <h3 style="margin: 0; font-size: 1.2rem;">📊 Lead Status Distribution</h3>
         </div>
         <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
     """
@@ -623,18 +642,23 @@ def render_lead_status_metrics(status_counts, total_leads):
     sorted_statuses = status_counts.sort_values(ascending=False)
     
     for status, count in sorted_statuses.items():
-        if status in status_config:
-            config = status_config[status]
+        status_str = str(status)
+        if status_str in status_config:
+            config = status_config[status_str]
+            status_class = config["class"]
+            icon = config["icon"]
         else:
-            config = {"class": "", "icon": "📊"}
+            # Default styling for unknown statuses
+            status_class = "status-card-unknown"
+            icon = "📊"
         
         percentage = (count / total_leads * 100) if total_leads > 0 else 0
         
         html += f"""
-        <div class="status-card {config['class']}">
+        <div class="status-card {status_class}">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <div style="font-size: 0.9rem; color: #6c757d; margin-bottom: 5px;">{config['icon']} {status}</div>
+                    <div style="font-size: 0.9rem; color: #6c757d; margin-bottom: 5px;">{icon} {status_str}</div>
                     <div class="status-count">{count:,}</div>
                 </div>
                 <div style="text-align: right;">
@@ -651,7 +675,7 @@ def render_lead_status_metrics(status_counts, total_leads):
             <strong>📝 Summary:</strong> Total of {total_leads:,} leads categorized by status
         </div>
     </div>
-    """
+    """.format(total_leads=total_leads)
     
     return html
 
@@ -875,66 +899,23 @@ def create_excel_report(df_contacts, df_customers, metrics, kpis, date_range, da
     return excel_data
 
 # ✅ NEW: Lead Status Metrics Function
-def create_lead_status_metrics(df_contacts):
-    """Create a metric showing count of each lead status."""
+def create_metric_6(df_contacts):
+    """METRIC 6: Lead Status Count Breakdown"""
     if df_contacts.empty or 'Lead Status' not in df_contacts.columns:
         return pd.DataFrame()
     
-    # Get status counts
+    # Get all lead status counts
     status_counts = df_contacts['Lead Status'].value_counts().reset_index()
     status_counts.columns = ['Lead Status', 'Count']
     
-    # Calculate percentage
+    # Calculate percentages
     total_leads = len(df_contacts)
     status_counts['Percentage'] = (status_counts['Count'] / total_leads * 100).round(2)
     
-    # Add description
-    status_descriptions = {
-        'Hot': 'High intent, ready to buy',
-        'Warm': 'Interested, needs nurturing',
-        'Cold': 'Low engagement, early stage',
-        'New Lead': 'Recently added, unqualified',
-        'Qualified Lead': 'Meets criteria, not yet in deal pipeline',
-        'Not Interested': 'Explicitly declined interest',
-        'Not Connected (NC)': 'Unable to reach',
-        'Not Qualified': 'Doesn\'t meet criteria',
-        'Duplicate': 'Multiple records for same contact',
-        'Unknown': 'Status not specified'
-    }
+    # Order by count descending
+    status_counts = status_counts.sort_values('Count', ascending=False)
     
-    status_counts['Description'] = status_counts['Lead Status'].map(status_descriptions)
-    
-    # Order by predefined priority
-    status_order = ['Hot', 'Warm', 'Cold', 'New Lead', 'Qualified Lead', 
-                    'Not Interested', 'Not Connected (NC)', 'Not Qualified', 
-                    'Duplicate', 'Unknown']
-    
-    # Create ordered DataFrame
-    ordered_data = []
-    for status in status_order:
-        if status in status_counts['Lead Status'].values:
-            row = status_counts[status_counts['Lead Status'] == status].iloc[0]
-            ordered_data.append({
-                'Lead Status': row['Lead Status'],
-                'Count': row['Count'],
-                'Percentage': row['Percentage'],
-                'Description': row['Description'] if 'Description' in row else status_descriptions.get(status, '')
-            })
-    
-    # Add any other statuses not in our order
-    for status in status_counts['Lead Status'].unique():
-        if status not in status_order:
-            row = status_counts[status_counts['Lead Status'] == status].iloc[0]
-            ordered_data.append({
-                'Lead Status': row['Lead Status'],
-                'Count': row['Count'],
-                'Percentage': row['Percentage'],
-                'Description': row['Description'] if 'Description' in row else ''
-            })
-    
-    metrics_df = pd.DataFrame(ordered_data)
-    
-    return metrics_df
+    return status_counts
 
 # ✅ NEW: Attractive Owner Visualization Functions
 def create_owner_performance_heatmap(metric_4):
@@ -1348,7 +1329,7 @@ def normalize_lead_status(raw_status):
             return "Warm"
     
     if "not_connect" in status or "nc" in status.lower():
-        return "Not Connected (NC)"
+        return "Not Connected"
     
     if "not_interest" in status:
         return "Not Interested"
@@ -1364,6 +1345,12 @@ def normalize_lead_status(raw_status):
     
     if "qualified" in status:
         return "Qualified Lead"
+    
+    if "upselling" in status:
+        return "Upselling"
+    
+    if "course shifting" in status or "course_shifting" in status:
+        return "Course Shifting"
     
     if status in LEAD_STATUS_MAP:
         return LEAD_STATUS_MAP[status]
@@ -2168,78 +2155,6 @@ def create_metric_5(df_contacts, df_customers):
     
     return final_df
 
-# ✅ NEW: METRIC 6 - Lead Status Count Metrics
-def create_metric_6(df_contacts):
-    """METRIC 6: Lead Status Count Breakdown"""
-    if df_contacts.empty or 'Lead Status' not in df_contacts.columns:
-        return pd.DataFrame()
-    
-    # Get all lead status counts
-    status_counts = df_contacts['Lead Status'].value_counts().reset_index()
-    status_counts.columns = ['Lead Status', 'Count']
-    
-    # Calculate percentages
-    total_leads = len(df_contacts)
-    status_counts['Percentage'] = (status_counts['Count'] / total_leads * 100).round(2)
-    
-    # Add description for each status
-    status_descriptions = {
-        'Hot': 'High intent leads, ready to convert',
-        'Warm': 'Interested leads, need nurturing',
-        'Cold': 'Low engagement leads, early stage',
-        'New Lead': 'Recently added, unqualified leads',
-        'Qualified Lead': 'Meets criteria, not in deal pipeline yet',
-        'Not Interested': 'Explicitly declined interest',
-        'Not Connected (NC)': 'Unable to reach via contact methods',
-        'Not Qualified': "Doesn't meet qualification criteria",
-        'Duplicate': 'Multiple records for same contact',
-        'Unknown': 'Status not specified'
-    }
-    
-    status_counts['Description'] = status_counts['Lead Status'].map(status_descriptions)
-    
-    # Order by predefined priority
-    status_order = ['Hot', 'Warm', 'Cold', 'New Lead', 'Qualified Lead', 
-                    'Not Interested', 'Not Connected (NC)', 'Not Qualified', 
-                    'Duplicate', 'Unknown']
-    
-    # Create ordered DataFrame
-    ordered_data = []
-    for status in status_order:
-        if status in status_counts['Lead Status'].values:
-            row = status_counts[status_counts['Lead Status'] == status].iloc[0]
-            ordered_data.append({
-                'Lead Status': row['Lead Status'],
-                'Count': row['Count'],
-                'Percentage': row['Percentage'],
-                'Description': row['Description'] if 'Description' in row else status_descriptions.get(status, '')
-            })
-    
-    # Add any other statuses not in our order
-    for status in status_counts['Lead Status'].unique():
-        if status not in status_order:
-            row = status_counts[status_counts['Lead Status'] == status].iloc[0]
-            ordered_data.append({
-                'Lead Status': row['Lead Status'],
-                'Count': row['Count'],
-                'Percentage': row['Percentage'],
-                'Description': row['Description'] if 'Description' in row else ''
-            })
-    
-    metrics_df = pd.DataFrame(ordered_data)
-    
-    # Add summary row
-    summary_row = {
-        'Lead Status': 'TOTAL',
-        'Count': total_leads,
-        'Percentage': 100.00,
-        'Description': f'Total leads across {len(metrics_df)-1} status categories'
-    }
-    
-    metrics_df = pd.concat([metrics_df, pd.DataFrame([summary_row])], ignore_index=True)
-    
-    return metrics_df
-
 # ✅ NEW: Course Revenue Analysis
 def create_course_revenue(df_customers):
     """Calculate revenue by course from customer data."""
@@ -2421,11 +2336,13 @@ def calculate_kpis(df_contacts, df_customers):
     warm = status_counts.get('Warm', 0)
     hot = status_counts.get('Hot', 0)
     new_lead = status_counts.get('New Lead', 0)
-    not_connected = status_counts.get('Not Connected (NC)', 0)
+    not_connected = status_counts.get('Not Connected', 0)
     not_interested = status_counts.get('Not Interested', 0)
     not_qualified = status_counts.get('Not Qualified', 0)
     duplicate = status_counts.get('Duplicate', 0)
     qualified_lead = status_counts.get('Qualified Lead', 0)
+    upselling = status_counts.get('Upselling', 0)
+    course_shifting = status_counts.get('Course Shifting', 0)
     
     # ✅ Check for any "Customer" in leads (should be 0)
     customer_in_leads = status_counts.get('Customer', 0)
@@ -2490,6 +2407,8 @@ def calculate_kpis(df_contacts, df_customers):
         'not_qualified': not_qualified,
         'duplicate': duplicate,
         'qualified_lead': qualified_lead,
+        'upselling': upselling,
+        'course_shifting': course_shifting,
         'lead_to_customer_pct': lead_to_customer_pct,
         'lead_to_deal_pct': lead_to_deal_pct,
         'deal_to_customer_pct': deal_to_customer_pct,
@@ -2711,7 +2630,7 @@ def main():
                                 'metric_1': create_metric_1(df_contacts),
                                 'metric_2': create_metric_2(df_contacts),
                                 'metric_4': create_metric_4(df_contacts, df_customers),
-                                'metric_5': create_metric_5(df_contacts, df_customers),  # ✅ NEW METRIC
+                                'metric_5': create_metric_5(df_contacts, df_customers),
                                 'metric_6': create_metric_6(df_contacts)  # ✅ NEW LEAD STATUS METRIC
                             }
                             
@@ -3400,16 +3319,13 @@ def main():
         
         # ✅ NEW SECTION 6: Lead Status Metrics
         with tab6:
-            st.markdown('<div class="section-header"><h3>🔢 Lead Status Breakdown Metrics</h3></div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header"><h3>🔢 Lead Status Breakdown</h3></div>', unsafe_allow_html=True)
             
             metric_6 = filtered_metrics['metric_6']
             
             if not metric_6.empty:
                 # Total leads summary
                 total_leads = len(filtered_df)
-                
-                # Display lead status metrics in visual format
-                st.markdown("### 📊 Lead Status Distribution")
                 
                 # Get status counts for visualization
                 status_counts = filtered_df['Lead Status'].value_counts()
@@ -3425,9 +3341,6 @@ def main():
                 
                 # Apply conditional formatting to the table
                 def highlight_status_row(row):
-                    if row['Lead Status'] == 'TOTAL':
-                        return ['background-color: #2c3e50; color: white; font-weight: bold'] * len(row)
-                    
                     colors = {
                         'Hot': '#dc3545',
                         'Warm': '#fd7e14',
@@ -3435,16 +3348,18 @@ def main():
                         'New Lead': '#20c997',
                         'Qualified Lead': '#28a745',
                         'Not Interested': '#6c757d',
-                        'Not Connected (NC)': '#6f42c1',
+                        'Not Connected': '#6f42c1',
                         'Not Qualified': '#17a2b8',
                         'Duplicate': '#ffc107',
-                        'Unknown': '#6c757d'
+                        'Upselling': '#9c27b0',
+                        'Course Shifting': '#795548',
+                        'Unknown': '#607d8b'
                     }
                     
-                    bg_color = colors.get(row['Lead Status'], '#f8f9fa')
+                    status = str(row['Lead Status'])
+                    bg_color = colors.get(status, '#f8f9fa')
                     return [
                         f'background-color: {bg_color}20; font-weight: bold',
-                        f'background-color: {bg_color}20',
                         f'background-color: {bg_color}20',
                         f'background-color: {bg_color}20'
                     ]
@@ -3453,7 +3368,7 @@ def main():
                 display_df = metric_6.copy()
                 if not display_df.empty:
                     # Format percentages
-                    display_df['Percentage'] = display_df['Percentage'].apply(lambda x: f"{x:.2f}%" if x != 100 else "100%")
+                    display_df['Percentage'] = display_df['Percentage'].apply(lambda x: f"{x:.2f}%")
                     
                     # Apply styling
                     styled_df = display_df.style.apply(highlight_status_row, axis=1)
@@ -3921,7 +3836,7 @@ def main():
                     </div>
                     
                     <div style='margin-top: 2rem; padding: 1rem; background-color: #e8f4fd; border-radius: 0.5rem;'>
-                        <h5>📚 NEW: Lead Status Metrics</h5>
+                        <h5>🔢 NEW: Lead Status Breakdown Metrics</h5>
                         <p>Now includes comprehensive lead status breakdown:</p>
                         <div style='display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 15px;'>
                             <div style='background: linear-gradient(135deg, #dc3545, #ff6b6b); color: white; padding: 10px; border-radius: 5px;'>
