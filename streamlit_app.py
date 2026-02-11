@@ -1399,10 +1399,8 @@ def normalize_lead_status(raw_status):
                 return "Hot"
             elif "warm" in status:
                 return "Warm"
-            elif "cold" in status:
-                return "Cold"
             else:
-                return "CUSTOMER_IGNORE"  # FILTER THIS OUT!
+                return "Qualified Lead"  # [OK] KEEP THESE LEADS (map to Qualified Lead)
     
     # Now handle normal lead statuses
     if "prospect" in status:
@@ -1610,8 +1608,9 @@ def date_to_hubspot_timestamp(date_obj, is_end_date=False):
     dt_utc = dt_ist.astimezone(pytz.UTC)
     return int(dt_utc.timestamp() * 1000)
 
+@st.cache_data(ttl=900, show_spinner=False)
 def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end_date):
-    """Fetch ALL contacts from HubSpot with server-side date filtering."""
+    """Fetch ALL contacts from HubSpot with server-side date filtering (Cached 15 mins)."""
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
@@ -1719,8 +1718,9 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
         return [], 0
 
 # [OK] Fetch DEALS using CORRECT Stage IDs
+@st.cache_data(ttl=900, show_spinner=False)
 def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
-    """Fetch DEALS from HubSpot using CORRECT stage IDs (not labels)."""
+    """Fetch DEALS from HubSpot using CORRECT stage IDs (Cached 15 mins)."""
     if not customer_stage_ids:
         st.error(" No customer stage IDs configured.")
         return [], 0
@@ -1820,6 +1820,7 @@ def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
         st.error(f" Unexpected error fetching deals: {e}")
         return [], 0
 
+@st.cache_data(show_spinner=False)
 def process_contacts_data(contacts, owner_mapping=None, api_key=None):
     """Process raw contacts data into a clean DataFrame - ABSOLUTELY NO CUSTOMER HERE."""
     if not contacts:
@@ -1896,17 +1897,14 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None):
     
     df = pd.DataFrame(processed_data)
     
-    # [OK] CRITICAL: Filter out any leads marked as "CUSTOMER_IGNORE" (actual customers tracked in deals)
+    # [OK] No longer filtering out "CUSTOMER_IGNORE" as we map them to "Qualified Lead"
     if not df.empty:
         initial_count = len(df)
-        df = df[df['Lead Status'] != "CUSTOMER_IGNORE"]
-        filtered_count = len(df)
-        if initial_count > filtered_count:
-            # quietly removed customers
-            pass
+        pass  # Kept structure to minimize diff, but logic is effectively disabled for now
     
     return df
 
+@st.cache_data(show_spinner=False)
 def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stages=None):
     """Process raw deals data into customer DataFrame."""
     if not deals:
@@ -2544,7 +2542,7 @@ def main():
         """
         <div class="header-container">
             <h1 style="margin: 0; font-size: 2.5rem;"> HubSpot Business Performance Dashboard</h1>
-            <p style="margin: 0.5rem 0 0 0; font-size: 1.2rem; opacity: 0.9;"> 100% CLEAN: NO Customers in Lead Data</p>
+            <p style="margin: 0.5rem 0 0 0; font-size: 1.2rem; opacity: 0.9;"> Total Leads Count Includes "Customer" Status Contacts</p>
             <p style="margin: 0.5rem 0 0 0; font-size: 1rem; opacity: 0.8;">Customers ONLY from Deals | Leads NEVER contain "Customer"</p>
         </div>
         """,
@@ -2554,10 +2552,9 @@ def main():
     # [OK] CRITICAL FIX WARNING
     st.markdown("""
     <div class="warning-card">
-        <strong> CRITICAL FIX APPLIED:</strong><br>
-         <code>normalize_lead_status()</code> function now <strong>FILTERS OUT "Customer" leads</strong><br>
-         Any lead with status containing "customer", "won", "paid" is <strong>EXCLUDED</strong> from lead counts.<br>
-         This ensures TOTAL SEPARATION between Leads and Customers (Deals).
+        <strong> NOTE:</strong><br>
+         Leads with status "Customer" are now included as <strong>"Qualified Lead"</strong> in the total count.<br>
+         This matches HubSpot's total contact count.
     </div>
     """, unsafe_allow_html=True)
     
@@ -2712,6 +2709,11 @@ def main():
             if start_date > end_date:
                 st.error("Start date must be before end date.")
             else:
+                # Add explicit cache clearing option
+                if st.button(" Clear Cache & Refresh", type="secondary", use_container_width=True):
+                    st.cache_data.clear()
+                    st.rerun()
+
                 with st.spinner("Fetching data..."):
                     is_valid, message = test_hubspot_connection(api_key)
                     
