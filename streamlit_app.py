@@ -27,6 +27,14 @@ MAX_LABEL_LENGTH = 25  # Truncate long labels
 CHART_HEIGHT = 420
 COLOR_PALETTE = px.colors.qualitative.Set2
 
+# Excluded Course Owners
+EXCLUDED_OWNERS = [
+    "Mahalekshmi M J",
+    "Sreeja Anoop",
+    "arya.krishnan",
+    "Devi Krishna"
+]
+
 # Will be populated dynamically
 CUSTOMER_DEAL_STAGES = []  # Will contain stage IDs, not labels
 
@@ -2327,6 +2335,25 @@ def create_volume_conversion_matrix(metric_1, df_contacts, df_customers):
     
     return matrix_df
 
+def calculate_previous_period(start_date, end_date):
+    """Calculate the previous period based on the current date range."""
+    # If starts on 1st of month, compare to previous FULL month
+    if start_date.day == 1:
+        # Previous month end is start_date - 1 day
+        prev_end = start_date - timedelta(days=1)
+        # Previous month start is 1st of that month
+        prev_start = prev_end.replace(day=1)
+        return prev_start, prev_end
+    
+    # Otherwise just shift specific number of days back
+    delta = end_date - start_date
+    days_diff = delta.days + 1
+    
+    prev_end = start_date - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=days_diff - 1)
+        
+    return prev_start, prev_end
+
 def create_comparison_data(df_contacts, df_customers, comparison_type, item1, item2):
     """Create comparison data for different comparison types."""
     if df_contacts.empty:
@@ -2646,6 +2673,7 @@ def main():
                  st.error("No customer stages auto-detected. Please configure manually.")
         
         st.divider()
+
         
         # Date Range
         st.markdown("##  Date Range Filter")
@@ -2713,6 +2741,15 @@ def main():
                             
                             # Process deals (customers)
                             df_customers = process_deals_as_customers(deals, owner_mapping, api_key, st.session_state.deal_stages)
+                            
+                            # [OK] FILTER OUT EXCLUDED OWNERS
+                            if df_contacts is not None and not df_contacts.empty:
+                                df_contacts = df_contacts[~df_contacts['Course Owner'].isin(EXCLUDED_OWNERS)]
+                                
+                            if df_customers is not None and not df_customers.empty:
+                                df_customers = df_customers[~df_customers['Course Owner'].isin(EXCLUDED_OWNERS)]
+                            
+                            st.session_state.contacts_df = df_contacts
                             st.session_state.customers_df = df_customers
                             
                             # Calculate metrics - ADD NEW METRIC 6
@@ -2749,8 +2786,13 @@ def main():
         if st.button(" Refresh Analysis", use_container_width=True, 
                     disabled=st.session_state.contacts_df is None):
             if st.session_state.contacts_df is not None:
+                # [OK] RE-FILTER just in case
                 df_contacts = st.session_state.contacts_df
+                df_contacts = df_contacts[~df_contacts['Course Owner'].isin(EXCLUDED_OWNERS)]
+                
                 df_customers = st.session_state.customers_df
+                df_customers = df_customers[~df_customers['Course Owner'].isin(EXCLUDED_OWNERS)]
+
                 
                 metric_4_data = create_metric_4(df_contacts, df_customers)
                 
@@ -2875,8 +2917,9 @@ def main():
         metrics = st.session_state.metrics
         revenue_data = st.session_state.revenue_data
         matrix_data = st.session_state.matrix_data
-        
+
         # [OK] Data Validation FIRST
+
         st.markdown("### [OK] Data Validation Check")
         
         # Check for "Customer" in leads
@@ -3101,7 +3144,7 @@ def main():
         st.divider()
         
         # [OK] ENHANCED: Create tabs with NEW METRIC 6 \u0026 7 tab
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
             " Lead Analysis", 
             " Customer Analysis", 
             " Owner KPI Dashboard",
@@ -3111,7 +3154,8 @@ def main():
             " Volume vs Conversion",
             " Revenue Analysis",
             "vs Comparison View",
-            " Team Comparison" # [OK] NEW TAB FOR METRIC 7
+            " Team Comparison",
+            " Month Comparison" # [OK] NEW TAB FOR MONTH COMPARISON
         ])
         
         # SECTION 1: Lead Analysis
@@ -3933,6 +3977,168 @@ def main():
             
             else:
                  st.info("No team data available.")
+        
+        # SECTION 10: Month Comparison
+        with tab11:
+            st.markdown('<div class="section-header"><h3> Month Comparison (Current vs Previous)</h3></div>', unsafe_allow_html=True)
+            
+            if st.session_state.date_range:
+                current_start = datetime.strptime(st.session_state.date_range[0], "%Y-%m-%d").date()
+                current_end = datetime.strptime(st.session_state.date_range[1], "%Y-%m-%d").date()
+                
+                prev_start, prev_end = calculate_previous_period(current_start, current_end)
+                
+                st.info(f" Comparing **Current Period:** {current_start} to {current_end}  vs  **Previous Period:** {prev_start} to {prev_end}")
+                
+                # Fetch Button
+                if st.button(" Load Previous Period Data for Comparison", type="primary", use_container_width=True):
+                    with st.spinner("Fetching data for previous period..."):
+                        # Fetch Data for Previous Period
+                        prev_contacts, _ = fetch_hubspot_contacts_with_date_filter(
+                            api_key, st.session_state.date_filter, prev_start, prev_end
+                        )
+                        
+                        prev_deals, _ = fetch_hubspot_deals(
+                            api_key, prev_start, prev_end, st.session_state.customer_stage_ids
+                        )
+                        
+                        # Process Data
+                        if prev_contacts:
+                            prev_df_contacts = process_contacts_data(prev_contacts, st.session_state.owner_mapping, api_key)
+                            prev_df_customers = process_deals_as_customers(prev_deals, st.session_state.owner_mapping, api_key, st.session_state.deal_stages)
+                            
+                            # [OK] FILTER OUT EXCLUDED OWNERS (Previous Period)
+                            if prev_df_contacts is not None and not prev_df_contacts.empty:
+                                prev_df_contacts = prev_df_contacts[~prev_df_contacts['Course Owner'].isin(EXCLUDED_OWNERS)]
+                            
+                            if prev_df_customers is not None and not prev_df_customers.empty:
+                                prev_df_customers = prev_df_customers[~prev_df_customers['Course Owner'].isin(EXCLUDED_OWNERS)]
+                            
+                            # Calculate Metrics
+                            prev_metric_1 = create_metric_1(prev_df_contacts) # Course Data
+                            prev_metric_4 = create_metric_4(prev_df_contacts, prev_df_customers) # Owner Data
+                            
+                            st.session_state['prev_metric_1'] = prev_metric_1
+                            st.session_state['prev_metric_4'] = prev_metric_4
+                            st.session_state['prev_data_loaded'] = True
+                            st.success(" Previous period data loaded!")
+                        else:
+                            st.warning("No data found for previous period.")
+            
+            # Display Comparison if Loaded
+            if st.session_state.get('prev_data_loaded', False):
+                
+                # 1. Course Performance Comparison
+                st.markdown("###  Course Performance: This Month vs Previous")
+                
+                curr_metric_1 = filtered_metrics['metric_1'].copy()
+                prev_metric_1 = st.session_state.get('prev_metric_1', pd.DataFrame()).copy()
+                
+                if not curr_metric_1.empty and not prev_metric_1.empty:
+                    # Prepare comparison dataframe
+                    comp_data = []
+                    
+                    all_courses = set(curr_metric_1['Course'].unique()) | set(prev_metric_1['Course'].unique())
+                    
+                    for course in all_courses:
+                        # Current Logic
+                        curr_row = curr_metric_1[curr_metric_1['Course'] == course]
+                        curr_total = curr_row['Total'].values[0] if not curr_row.empty and 'Total' in curr_row.columns else 0
+                        # Calculate Deal % for Current
+                        curr_deals = 0
+                        if not curr_row.empty:
+                             for status in ['Hot', 'Warm', 'Cold']:
+                                 if status in curr_row.columns:
+                                     curr_deals += curr_row[status].values[0]
+                        curr_deal_pct = (curr_deals / curr_total * 100) if curr_total > 0 else 0
+
+                        # Previous Logic
+                        prev_row = prev_metric_1[prev_metric_1['Course'] == course]
+                        prev_total = prev_row['Total'].values[0] if not prev_row.empty and 'Total' in prev_row.columns else 0
+                        # Calculate Deal % for Previous
+                        prev_deals = 0
+                        if not prev_row.empty:
+                             for status in ['Hot', 'Warm', 'Cold']:
+                                 if status in prev_row.columns:
+                                     prev_deals += prev_row[status].values[0]
+                        prev_deal_pct = (prev_deals / prev_total * 100) if prev_total > 0 else 0
+                        
+                        comp_data.append({
+                            'Course': course,
+                            'Current Leads': curr_total,
+                            'Previous Leads': prev_total,
+                            'Lead Change': curr_total - prev_total,
+                            'Current Deal %': round(curr_deal_pct, 1),
+                            'Previous Deal %': round(prev_deal_pct, 1),
+                            'Deal % Change': round(curr_deal_pct - prev_deal_pct, 1)
+                        })
+                    
+                    comp_df = pd.DataFrame(comp_data)
+                    
+                    # Sort by volume
+                    comp_df = comp_df.sort_values('Current Leads', ascending=False)
+                    
+                    # Styling
+                    def highlight_change(val):
+                        color = 'green' if val > 0 else 'red' if val < 0 else 'black'
+                        return f'color: {color}; font-weight: bold'
+                    
+                    st.dataframe(
+                        comp_df.style.applymap(highlight_change, subset=['Lead Change', 'Deal % Change']),
+                        use_container_width=True
+                    )
+                else:
+                    st.info("Insufficient data for Comparison")
+
+                st.divider()
+
+                # 2. Owner Performance Comparison
+                st.markdown("###  Owner Performance: This Month vs Previous")
+                
+                curr_metric_4 = filtered_metrics['metric_4'].copy()
+                prev_metric_4 = st.session_state.get('prev_metric_4', pd.DataFrame()).copy()
+                
+                if not curr_metric_4.empty and not prev_metric_4.empty:
+                     # Prepare comparison
+                    owner_comp_data = []
+                    
+                    all_owners = set(curr_metric_4['Course Owner'].unique()) | set(prev_metric_4['Course Owner'].unique())
+                    
+                    for owner in all_owners:
+                        # Current
+                        curr_row = curr_metric_4[curr_metric_4['Course Owner'] == owner]
+                        curr_leads = curr_row['Grand Total'].values[0] if not curr_row.empty and 'Grand Total' in curr_row.columns else 0
+                        curr_conv = curr_row['Lead->Customer %'].values[0] if not curr_row.empty and 'Lead->Customer %' in curr_row.columns else 0
+                        
+                        # Previous
+                        prev_row = prev_metric_4[prev_metric_4['Course Owner'] == owner]
+                        prev_leads = prev_row['Grand Total'].values[0] if not prev_row.empty and 'Grand Total' in prev_row.columns else 0
+                        prev_conv = prev_row['Lead->Customer %'].values[0] if not prev_row.empty and 'Lead->Customer %' in prev_row.columns else 0
+                        
+                        owner_comp_data.append({
+                            'Owner': owner,
+                            'Current Leads': curr_leads,
+                            'Prev Leads': prev_leads,
+                            'Lead Change': curr_leads - prev_leads,
+                            'Current Conv %': curr_conv,
+                            'Prev Conv %': prev_conv,
+                            'Conv % Change': round(curr_conv - prev_conv, 1)
+                        })
+                    
+                    owner_comp_df = pd.DataFrame(owner_comp_data)
+                    owner_comp_df = owner_comp_df.sort_values('Current Leads', ascending=False)
+                    
+                    # Styling
+                    def highlight_change(val):
+                        color = 'green' if val > 0 else 'red' if val < 0 else 'black'
+                        return f'color: {color}; font-weight: bold'
+                        
+                    st.dataframe(
+                        owner_comp_df.style.applymap(highlight_change, subset=['Lead Change', 'Conv % Change']),
+                        use_container_width=True
+                    )
+                else:
+                    st.info("Insufficient data for Owner Comparison")
     
     else:
         # Welcome screen
