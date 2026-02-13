@@ -972,12 +972,48 @@ def get_detailed_team_data(metric_4):
             team_results[team_name] = pd.DataFrame()
             continue
             
+        # [OK] NEW: Calculate Conversion Metrics for Team Members
+        # Note: 'Hot', 'Warm', 'Cold' from contacts might not match 'Hot_Customer' from deals
+        # So we display the conversion count primarily, or ratio if possible.
+        
+        if 'Hot_Customer' in team_df.columns:
+            # Denominator: Hot Leads (Contacts) + Converted Hot (Deals) isn't perfect but best proxy
+            # If 'Hot' column exists from Metric 2 (Contacts)
+            hot_contacts = team_df['Hot'] if 'Hot' in team_df.columns else 0
+            
+            team_df['HOT-CUSTOMER CONVERSION'] = np.where(
+                (hot_contacts + team_df['Hot_Customer']) > 0,
+                (team_df['Hot_Customer'] / (hot_contacts + team_df['Hot_Customer']) * 100).round(2),
+                0
+            )
+
+        if 'Warm_Customer' in team_df.columns:
+            warm_contacts = team_df['Warm'] if 'Warm' in team_df.columns else 0
+            
+            team_df['WARM-CUSTOMER CONVERSION'] = np.where(
+                (warm_contacts + team_df['Warm_Customer']) > 0,
+                (team_df['Warm_Customer'] / (warm_contacts + team_df['Warm_Customer']) * 100).round(2),
+                0
+            )
+
+        if 'Cold_Customer' in team_df.columns:
+            cold_contacts = team_df['Cold'] if 'Cold' in team_df.columns else 0
+            
+            team_df['COLD TO CUSTOMER CONVERSION'] = np.where(
+                (cold_contacts + team_df['Cold_Customer']) > 0,
+                (team_df['Cold_Customer'] / (cold_contacts + team_df['Cold_Customer']) * 100).round(2),
+                0
+            )
+
         # Calculate Total Row
         total_row = pd.Series(index=team_df.columns, dtype='object')
         total_row['Course Owner'] = 'TOTAL'
         
         # Sum numeric columns
-        numeric_cols = ['Grand Total', 'Customer', 'Customer_Revenue', 'Deal Leads', 'Hot', 'Warm', 'Cold']
+        numeric_cols = ['Grand Total', 'Customer', 'Customer_Revenue', 'Deal Leads', 
+                        'Hot', 'Warm', 'Cold', 
+                        'Hot_Customer', 'Warm_Customer', 'Cold_Customer']
+        
         for col in numeric_cols:
             if col in team_df.columns:
                 total_row[col] = team_df[col].sum()
@@ -992,10 +1028,39 @@ def get_detailed_team_data(metric_4):
         total_row['Lead->Deal %'] = (deal_leads / grand_total * 100).round(2) if grand_total > 0 else 0
         total_row['Lead->Customer %'] = (customers / grand_total * 100).round(2) if grand_total > 0 else 0
         
+        # [OK] NEW: Recalculate Conversion Metrics for Total Row
+        if 'Hot_Customer' in team_df.columns:
+            h_cust = total_row.get('Hot_Customer', 0)
+            h_lead = total_row.get('Hot', 0)
+            total_row['HOT-CUSTOMER CONVERSION'] = (h_cust / (h_lead + h_cust) * 100).round(2) if (h_lead + h_cust) > 0 else 0
+
+        if 'Warm_Customer' in team_df.columns:
+            w_cust = total_row.get('Warm_Customer', 0)
+            w_lead = total_row.get('Warm', 0)
+            total_row['WARM-CUSTOMER CONVERSION'] = (w_cust / (w_lead + w_cust) * 100).round(2) if (w_lead + w_cust) > 0 else 0
+
+        if 'Cold_Customer' in team_df.columns:
+            c_cust = total_row.get('Cold_Customer', 0)
+            c_lead = total_row.get('Cold', 0)
+            total_row['COLD TO CUSTOMER CONVERSION'] = (c_cust / (c_lead + c_cust) * 100).round(2) if (c_lead + c_cust) > 0 else 0
+        
         # Append Total Row
         team_df_with_total = pd.concat([team_df, pd.DataFrame([total_row])], ignore_index=True)
         
-        team_results[team_name] = team_df_with_total
+        # [OK] NEW: Filter columns to show only relevant metrics as requested
+        # "THESE TABLE ONLY NEED THAT OTHER METRICS NOT NEED"
+        cols_to_show = [
+            'Course Owner', 
+            'Hot', 'Warm', 'Cold',
+            'Hot_Customer', 'Warm_Customer', 'Cold_Customer',
+            'HOT-CUSTOMER CONVERSION', 'WARM-CUSTOMER CONVERSION', 'COLD TO CUSTOMER CONVERSION',
+            'Customer', 'Customer_Revenue' # Keep these as they are fundamental
+        ]
+        
+        # Only keep columns that actually exist
+        final_cols = [c for c in cols_to_show if c in team_df_with_total.columns]
+        
+        team_results[team_name] = team_df_with_total[final_cols]
         
     return team_results
 
@@ -1349,6 +1414,17 @@ def detect_admission_confirmed_stage(all_stages):
         stage_label = stage_info.get("stage_label", "").lower()
         probability = stage_info.get("probability", "0")
         
+        # [OK] NEW: Explicit check for known IDs
+        if stage_id in ['closedwon', '1884422889']:
+             detected_stages.append({
+                "stage_id": stage_id,
+                "stage_label": stage_info.get("stage_label"),
+                "probability": probability,
+                "pipeline": stage_info.get("pipeline_label"),
+                "match_reason": f"Explicit ID Match: {stage_id}"
+            })
+             continue
+
         for target in target_labels:
             if target in stage_label:
                 try:
@@ -1773,6 +1849,10 @@ def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
         "offering",
         "course_name",
         "program_name",
+        "hs_v2_date_entered_contractsent", # Hot
+        "hs_v2_date_entered_presentationscheduled", # Warm
+        "hs_v2_date_entered_decisionmakerboughtin", # Cold
+        "hs_analytics_source"
     ]
     
     try:
@@ -1780,7 +1860,7 @@ def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
             body = {
                 "filterGroups": filter_groups,
                 "properties": deal_properties,
-                "associations": ["owners"],
+                "associations": ["owners", "contacts"],
                 "limit": 100,
                 "sorts": [{"propertyName": "closedate", "direction": "DESCENDING"}]
             }
@@ -1940,6 +2020,13 @@ def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stag
             owners = associations.get("owners", {}).get("results", [])
             if owners:
                 owner_id = str(owners[0].get("id", ""))
+
+        # [OK] NEW: Extract associated contact ID
+        associated_contact_id = ""
+        associations = deal.get("associations", {})
+        contacts_assoc = associations.get("contacts", {}).get("results", [])
+        if contacts_assoc:
+            associated_contact_id = str(contacts_assoc[0].get("id", ""))
         
         owner_id = str(owner_id)
         
@@ -1971,6 +2058,13 @@ def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stag
         # Convert stage ID to label if possible
         deal_stage_label = stage_label_map.get(deal_stage_id, deal_stage_id)
         
+        # [OK] NEW: Extract Stage History
+        date_entered_hot = properties.get("hs_v2_date_entered_contractsent", "")
+        date_entered_warm = properties.get("hs_v2_date_entered_presentationscheduled", "")
+        date_entered_cold = properties.get("hs_v2_date_entered_decisionmakerboughtin", "")
+        
+        source = properties.get("hs_analytics_source", "")
+
         processed_data.append({
             "Customer ID": deal.get("id", ""),
             "Deal Name": properties.get("dealname", ""),
@@ -1980,7 +2074,12 @@ def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stag
             "Close Date": close_date,
             "Deal Stage ID": deal_stage_id,
             "Deal Stage Label": deal_stage_label,
-            "Is Customer": 1  # [OK] ALL these deals are customers
+            "Associated Contact ID": associated_contact_id, # [OK] NEW: Link to contact
+            "Is Customer": 1,  # [OK] ALL these deals are customers
+            "Was_Hot": 1 if date_entered_hot else 0,
+            "Was_Warm": 1 if date_entered_warm else 0,
+            "Was_Cold": 1 if date_entered_cold else 0,
+            "Analytics Source": source
         })
     
     df = pd.DataFrame(processed_data)
@@ -2057,7 +2156,11 @@ def create_metric_4(df_contacts, df_customers):
     if df_customers is not None and not df_customers.empty and 'Course Owner' in df_customers.columns:
         customer_by_owner = df_customers.groupby('Course Owner').agg(
             Customer_Count=('Is Customer', 'sum'),
-            Customer_Revenue=('Amount', 'sum')
+            Customer_Revenue=('Amount', 'sum'),
+            # [OK] NEW: Count by Stage History
+            Hot_Customer=('Was_Hot', 'sum'),
+            Warm_Customer=('Was_Warm', 'sum'),
+            Cold_Customer=('Was_Cold', 'sum')
         ).reset_index()
     else:
         customer_by_owner = pd.DataFrame(columns=['Course Owner', 'Customer_Count', 'Customer_Revenue'])
@@ -2122,7 +2225,11 @@ def create_metric_4(df_contacts, df_customers):
     status_cols = ['Cold', 'Hot', 'Warm']
     existing_status_cols = [col for col in status_cols if col in result_df.columns]
     
-    final_cols = base_cols + existing_status_cols + [
+    # [OK] NEW: Add Conversion Columns
+    conversion_cols = ['Hot_Customer', 'Warm_Customer', 'Cold_Customer']
+    existing_conversion_cols = [col for col in conversion_cols if col in result_df.columns]
+    
+    final_cols = base_cols + existing_status_cols + existing_conversion_cols + [
         'Customer', 
         'Customer_Revenue',
         'Deal Leads', 
@@ -3967,10 +4074,9 @@ def main():
                     st.dataframe(
                         team_df.style.apply(highlight_total, axis=1).format({
                             "Customer_Revenue": "Rs.{:,.0f}",
-                            "Deal %": "{:.1f}%",
-                            "Customer %": "{:.1f}%",
-                            "Lead->Deal %": "{:.1f}%",
-                            "Lead->Customer %": "{:.1f}%"
+                            "HOT-CUSTOMER CONVERSION": "{:.1f}%",
+                            "WARM-CUSTOMER CONVERSION": "{:.1f}%",
+                            "COLD TO CUSTOMER CONVERSION": "{:.1f}%"
                         }),
                         use_container_width=True
                     )
