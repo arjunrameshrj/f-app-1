@@ -642,10 +642,12 @@ def render_kpi_row(kpis, container_class="kpi-container"):
     """
 
 # [OK] NEW: Lead Status Count Display Function - FIXED
-def render_lead_status_metrics(status_counts, total_leads):
-    """Render lead status metrics in a visually appealing format."""
+def render_lead_status_metrics(status_counts, total_leads, status_amounts=None):
+    """Render lead status metrics in a visually appealing format with optional amounts."""
     if status_counts.empty or total_leads == 0:
         return "<div>No lead status data available</div>"
+    
+    status_amounts = status_amounts or {}
     
     # Define status display order and colors
     status_config = {
@@ -689,12 +691,17 @@ def render_lead_status_metrics(status_counts, total_leads):
         
         percentage = (count / total_leads * 100) if total_leads > 0 else 0
         
-        # [FIX] syntax error invalid decimal literal by avoiding complex multiline f-strings
+        # [OK] NEW: Show Amount if available for this status
+        revenue_text = ""
+        if status_str in status_amounts and status_amounts[status_str] > 0:
+            revenue_text = f'<div style="font-size: 0.85rem; color: #28a745; font-weight: bold; margin-top: 5px;">Rs.{status_amounts[status_str]:,.0f}</div>'
+
         html += f'<div class="status-card {status_class}">'
         html += '<div style="display: flex; justify-content: space-between; align-items: center;">'
         html += '<div>'
         html += f'<div style="font-size: 0.9rem; color: #6c757d; margin-bottom: 5px;">{icon} {status_str}</div>'
         html += f'<div class="status-count">{count:,}</div>'
+        html += revenue_text
         html += '</div>'
         html += '<div style="text-align: right;">'
         html += '<div style="font-size: 1.8rem; font-weight: bold; color: #2c3e50;">'
@@ -1598,10 +1605,12 @@ def detect_admission_confirmed_stage(all_stages):
     return detected_stages
 
 # [OK] CRITICAL FIX: UPDATED normalize_lead_status function
-def normalize_lead_status(raw_status):
+def normalize_lead_status(raw_status, close_date=None, start_date=None, end_date=None):
     """
     Normalize lead status - ABSOLUTELY NO CUSTOMER HERE!
     This function MUST NEVER return "Customer" for any lead status.
+    If close_date is provided and outside the start/end range, 
+    "Qualified Lead" will be downgraded to "Hot" or "Warm".
     """
     if not raw_status:
         return "Unknown"
@@ -1616,14 +1625,33 @@ def normalize_lead_status(raw_status):
     # [OK] FIRST: Check if this contains any customer keywords - BLOCK THEM!
     for keyword in CUSTOMER_KEYWORDS_BLOCKLIST:
         if keyword in status:
+            # [OK] SPECIAL: If Close Date is provided, it MUST BE in the reporting range
+            # to be counted as a "Qualified Lead". Otherwise downgrade it.
+            # This ensures only leads closed IN RANGE are counted as Qualified.
+            is_in_range = True
+            if close_date and start_date and end_date:
+                try:
+                    # Parse close_date if it's a string
+                    if isinstance(close_date, str):
+                        c_date = datetime.strptime(close_date[:10], "%Y-%m-%d").date()
+                    else:
+                        c_date = close_date
+                    
+                    if not (start_date <= c_date <= end_date):
+                        is_in_range = False
+                except:
+                    pass
+            
+            if is_in_range:
+                return "Qualified Lead"
+            
             # This is PROBABLY a customer deal stage that leaked into contacts
-            # Map to "Qualified Lead" instead of "Customer"
             if "hot" in status:
                 return "Hot"
             elif "warm" in status:
                 return "Warm"
             else:
-                return "Qualified Lead"  # [OK] KEEP THESE LEADS (map to Qualified Lead)
+                return "Hot" # Fallback to Hot if out of date range
     
     # Now handle normal lead statuses
     if "prospect" in status:
@@ -1847,21 +1875,27 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
     after = None
     
     # Build filter
+    # Build filter based on selected field
     if date_field == "Created Date":
-        filter_groups = [{
-            "filters": [
-                {"propertyName": "createdate", "operator": "GTE", "value": start_timestamp},
-                {"propertyName": "createdate", "operator": "LTE", "value": end_timestamp}
-            ]
-        }]
+        filter_groups = [
+            {
+                "filters": [
+                    {"propertyName": "createdate", "operator": "GTE", "value": start_timestamp},
+                    {"propertyName": "createdate", "operator": "LTE", "value": end_timestamp}
+                ]
+            }
+        ]
     elif date_field == "Last Modified Date":
-        filter_groups = [{
-            "filters": [
-                {"propertyName": "lastmodifieddate", "operator": "GTE", "value": start_timestamp},
-                {"propertyName": "lastmodifieddate", "operator": "LTE", "value": end_timestamp}
-            ]
-        }]
+        filter_groups = [
+            {
+                "filters": [
+                    {"propertyName": "lastmodifieddate", "operator": "GTE", "value": start_timestamp},
+                    {"propertyName": "lastmodifieddate", "operator": "LTE", "value": end_timestamp}
+                ]
+            }
+        ]
     else:
+        # Both Created and Last Modified
         filter_groups = [
             {
                 "filters": [
@@ -1888,8 +1922,8 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
         "enquired_course", "interested_course", "course_interested",
         "program_of_interest", "course_of_interest", "product_of_interest",
         "firstname", "lastname", "email", "phone", 
-        "createdate", "lastmodifieddate", "hs_object_id",
-        "company", "jobtitle", "country"
+        "createdate", "lastmodifieddate", "closedate", "hs_object_id",
+        "company", "jobtitle", "country", "amount", "total_revenue"
     ]
     
     try:
@@ -2215,7 +2249,7 @@ def fetch_team_performance_deals(api_key, start_date, end_date, stage_ids_map):
     return unique_deals, len(unique_deals)
 
 @st.cache_data(show_spinner=False)
-def process_contacts_data(contacts, owner_mapping=None, api_key=None):
+def process_contacts_data(contacts, owner_mapping=None, api_key=None, start_date=None, end_date=None):
     """Process raw contacts data into a clean DataFrame - ABSOLUTELY NO CUSTOMER HERE."""
     if not contacts:
         return pd.DataFrame()
@@ -2268,11 +2302,25 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None):
         raw_lead_status = properties.get("hs_lead_status", "") or properties.get("lead_status", "")
         
         # [OK] CRITICAL: Normalize lead status - WILL NEVER RETURN "CUSTOMER"
-        lead_status = normalize_lead_status(raw_lead_status)
+        # Passing dates to ensure intersection check (Created Range AND Close Range)
+        close_date_raw = properties.get("closedate", "")
+        lead_status = normalize_lead_status(raw_lead_status, close_date=close_date_raw, start_date=start_date, end_date=end_date)
         
         # Create full name
         full_name = f"{properties.get('firstname', '')} {properties.get('lastname', '')}".strip()
         
+        # [OK] NEW: CORRECTLY GET AMOUNT OR TOTAL REVENUE
+        amount_val = properties.get("amount")
+        total_rev_val = properties.get("total_revenue")
+        
+        # Use total_revenue if it exists and is not None, else use amount if it exists
+        raw_val = total_rev_val if total_rev_val else amount_val
+        
+        try:
+            parsed_amount = float(str(raw_val).replace(",", "")) if raw_val else 0.0
+        except ValueError:
+            parsed_amount = 0.0
+            
         processed_data.append({
             "ID": contact.get("id", ""),
             "Full Name": full_name,
@@ -2285,8 +2333,10 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None):
             "Course Owner": owner_name,
             "Lead Status": lead_status,  # [OK] NO CUSTOMER HERE
             "Created Date": properties.get("createdate", ""),
+            "Close Date": properties.get("closedate", ""),
             "Lead Status Raw": raw_lead_status,
-            "Owner ID": owner_id
+            "Owner ID": owner_id,
+            "Amount": parsed_amount
         })
     
     df = pd.DataFrame(processed_data)
@@ -2607,16 +2657,14 @@ def create_metric_1(df):
     
     df_course['Course_Clean'] = df_course['Course/Program'].str.strip()
     
-    pivot = pd.pivot_table(
-        df_course,
-        index='Course_Clean',
-        columns='Lead Status',
-        values='ID',
-        aggfunc='count',
-        fill_value=0
-    )
+    pivot_counts = pd.pivot_table(df_course, index='Course_Clean', columns='Lead Status', values='ID', aggfunc='count', fill_value=0)
+    pivot_amounts = pd.pivot_table(df_course[df_course['Lead Status'] == 'Qualified Lead'], index='Course_Clean', values='Amount', aggfunc='sum', fill_value=0)
     
-    pivot = pivot.reset_index().rename(columns={'Course_Clean': 'Course'})
+    pivot = pivot_counts.reset_index().rename(columns={'Course_Clean': 'Course'})
+    if not pivot_amounts.empty:
+        pivot = pd.merge(pivot, pivot_amounts.rename(columns={'Amount': 'Qualified Lead Amount'}).reset_index().rename(columns={'Course_Clean': 'Course'}), on='Course', how='left').fillna(0)
+    else:
+        pivot['Qualified Lead Amount'] = 0
     
     if len(pivot.columns) > 1:
         status_cols = [col for col in pivot.columns if col != 'Course']
@@ -2638,15 +2686,29 @@ def create_metric_2(df):
         df_owner,
         index='Course Owner',
         columns='Lead Status',
-        values='ID',
-        aggfunc='count',
+        values=['ID', 'Amount'],
+        aggfunc={'ID': 'count', 'Amount': 'sum'},
         fill_value=0
     )
     
-    pivot = pivot.reset_index()
+    # Flatten multi-index columns
+    if isinstance(pivot.columns, pd.MultiIndex):
+        # We want: Status_Count or Status_Amount
+        # Actually, simpler: keep standard pivot for counts, and separate for amounts
+        pass
     
-    if len(pivot.columns) > 1:
-        status_cols = [col for col in pivot.columns if col != 'Course Owner']
+    # Let's do it cleaner for Metric 4/5 integration
+    pivot_counts = pd.pivot_table(df_owner, index='Course Owner', columns='Lead Status', values='ID', aggfunc='count', fill_value=0)
+    pivot_amounts = pd.pivot_table(df_owner[df_owner['Lead Status'] == 'Qualified Lead'], index='Course Owner', values='Amount', aggfunc='sum', fill_value=0)
+    
+    pivot = pivot_counts.reset_index()
+    if not pivot_amounts.empty:
+        pivot = pd.merge(pivot, pivot_amounts.rename(columns={'Amount': 'Qualified Lead Amount'}), on='Course Owner', how='left').fillna(0)
+    else:
+        pivot['Qualified Lead Amount'] = 0
+    
+    if len(pivot.columns) > 2: # Owner + Lead Statuses + Amount
+        status_cols = [col for col in pivot.columns if col not in ['Course Owner', 'Qualified Lead Amount']]
         pivot['Total'] = pivot[status_cols].sum(axis=1)
     
     return pivot
@@ -2683,6 +2745,7 @@ def create_metric_4(df_contacts, df_customers):
         result_df['Customer_Count'] = result_df['Customer_Count'].fillna(0)
         result_df['Customer_Revenue'] = result_df['Customer_Revenue'].fillna(0)
         result_df['Customer'] = result_df['Customer_Count']
+        # [OK] Revenue from qualified leads (CONTACTS) is already in result_df as 'Qualified Lead Amount'
     else:
         result_df['Customer_Count'] = 0
         result_df['Customer_Revenue'] = 0
@@ -2739,6 +2802,7 @@ def create_metric_4(df_contacts, df_customers):
     existing_conversion_cols = [col for col in conversion_cols if col in result_df.columns]
     
     final_cols = base_cols + existing_status_cols + existing_conversion_cols + [
+        'Qualified Lead Amount',
         'Customer', 
         'Customer_Revenue',
         'Deal Leads', 
@@ -2786,6 +2850,7 @@ def create_metric_5(df_contacts, df_customers):
         result_df['Customer_Count'] = result_df['Customer_Count'].fillna(0)
         result_df['Customer_Revenue'] = result_df['Customer_Revenue'].fillna(0)
         result_df['Customer'] = result_df['Customer_Count']
+        # [OK] Qualified Lead Amount already present in result_df
         # Drop the extra course column from merge
         result_df = result_df.drop(columns=['Course/Program'], errors='ignore')
     else:
@@ -3070,7 +3135,11 @@ def calculate_kpis(df_contacts, df_customers):
     not_interested = status_counts.get('Not Interested', 0)
     not_qualified = status_counts.get('Not Qualified', 0)
     duplicate = status_counts.get('Duplicate', 0)
-    qualified_lead = status_counts.get('Qualified Lead', 0) # Mapping handling
+    qualified_lead = status_counts.get('Qualified Lead', 0)
+    
+    # [OK] NEW: Calculate Qualified Lead Revenue (from contacts)
+    qualified_lead_revenue = df_contacts[df_contacts['Lead Status'] == 'Qualified Lead']['Amount'].sum()
+    
     upselling = status_counts.get('Upselling', 0)
     course_shifting = status_counts.get('Course Shifting', 0)
     closed_lost = status_counts.get('Closed Lost', 0)
@@ -3139,6 +3208,7 @@ def calculate_kpis(df_contacts, df_customers):
         'not_qualified': not_qualified,
         'duplicate': duplicate,
         'qualified_lead': qualified_lead,
+        'qualified_lead_revenue': qualified_lead_revenue,
         'upselling': upselling,
         'course_shifting': course_shifting,
         'closed_lost': closed_lost,
@@ -3370,8 +3440,8 @@ def main():
                         )
                         
                         if contacts:
-                            # Process contacts (leads)
-                            df_contacts = process_contacts_data(contacts, owner_mapping, api_key)
+                            # Process contacts (leads) - Passing dates for Qualified Lead intersection check
+                            df_contacts = process_contacts_data(contacts, owner_mapping, api_key, start_date=start_date, end_date=end_date)
                             st.session_state.contacts_df = df_contacts
                             
                             # Process deals (customers)
@@ -3470,72 +3540,7 @@ def main():
         if st.button("--' Clear All Data", use_container_width=True):
             st.session_state.clear()
             st.rerun()
-        
-        st.divider()
-        
-        # [OK] NEW: Download Section in Sidebar
-        st.markdown("##  Download Options")
-        
-        if st.session_state.contacts_df is not None and not st.session_state.contacts_df.empty:
-            df_contacts = st.session_state.contacts_df
-            df_customers = st.session_state.customers_df
-            metrics = st.session_state.metrics
             
-            if df_contacts is not None:
-                kpis = calculate_kpis(df_contacts, df_customers)
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Download Raw Data as CSV
-                    csv = df_contacts.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label=" Raw Data CSV",
-                        data=csv,
-                        file_name=f"hubspot_raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                        help="Download all contact data as CSV"
-                    )
-                
-                with col2:
-                    # Download KPI Dashboard as CSV
-                    if 'metric_4' in metrics and not metrics['metric_4'].empty:
-                        csv_kpi = metrics['metric_4'].to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label=" KPI Dashboard CSV",
-                            data=csv_kpi,
-                            file_name=f"hubspot_kpi_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                            mime="text/csv",
-                            use_container_width=True,
-                            help="Download owner KPI dashboard as CSV"
-                        )
-                
-                # Excel Download Button
-                if st.button(" Download Full Excel Report", use_container_width=True, type="primary"):
-                    with st.spinner(" Generating professional Excel report..."):
-                        try:
-                            excel_data = create_excel_report(
-                                df_contacts, 
-                                df_customers,
-                                metrics, 
-                                kpis, 
-                                st.session_state.date_range,
-                                st.session_state.date_filter
-                            )
-                            
-                            st.download_button(
-                                label=" Click to Download Excel Report",
-                                data=excel_data,
-                                file_name=f"HubSpot_Analytics_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                use_container_width=True,
-                                help="Download comprehensive Excel report with multiple sheets and formatting"
-                            )
-                            st.success("[OK] Excel report generated successfully!")
-                        except Exception as e:
-                            st.error(f" Error generating Excel report: {str(e)}")
-        
         st.divider()
         
         st.markdown("###  Dashboard Logic")
@@ -3560,7 +3565,7 @@ def main():
           Burn: High volume + Low conversion
           Weak: Low volume + Low conversion
         """)
-    
+
     # Main content area
     if st.session_state.contacts_df is not None and not st.session_state.contacts_df.empty:
         df_contacts = st.session_state.contacts_df.copy()
@@ -3577,7 +3582,6 @@ def main():
         matrix_data = st.session_state.matrix_data
 
         # [OK] Data Validation FIRST
-
         st.markdown("### [OK] Data Validation Check")
         
         # Check for "Customer" in leads
@@ -3803,6 +3807,8 @@ def main():
             render_kpi_row([
                 render_kpi("Total Leads", f"{kpis['total_leads']:,}", "From Contacts", "kpi-box-blue"),
                 render_kpi("Deal Leads", f"{kpis['deal_leads']:,}", f"{kpis['lead_to_deal_pct']}% conversion", "kpi-box-green"),
+                render_kpi("Qualified Leads", f"{kpis['qualified_lead']:,}", "Created & Closed", "kpi-box-orange"),
+                render_kpi("Qualified Lead Value", f"Rs.{kpis['qualified_lead_revenue']:,.0f}", "Revenue Amount", "kpi-box-teal"),
                 render_kpi("Customers", f"{kpis['customer']:,}", "From Deals ONLY", "deal-kpi"),
                 render_kpi("Total Revenue", f"Rs.{kpis['total_revenue']:,.0f}", f"From {kpis['customer']:,} customers", "revenue-kpi"),
             ]),
@@ -4224,8 +4230,9 @@ def main():
                 status_counts = filtered_df['Lead Status'].value_counts()
                 
                 # Display visual metrics
+                status_amounts = filtered_df.groupby('Lead Status')['Amount'].sum().to_dict()
                 st.markdown(
-                    render_lead_status_metrics(status_counts, total_leads),
+                    render_lead_status_metrics(status_counts, total_leads, status_amounts),
                     unsafe_allow_html=True
                 )
                 
@@ -4271,7 +4278,7 @@ def main():
                 # Key insights
                 st.markdown("###  Key Insights")
                 
-                col_insight1, col_insight2, col_insight3 = st.columns(3)
+                col_insight1, col_insight2, col_insight3, col_insight4 = st.columns(4)
                 
                 with col_insight1:
                     # Deal pipeline status
@@ -4306,6 +4313,17 @@ def main():
                         "New Leads",
                         f"{new_leads:,}",
                         f"{new_pct:.1f}% of total"
+                    )
+
+                with col_insight4:
+                    # Qualified Lead Amount
+                    qualified_leads = status_counts.get('Qualified Lead', 0)
+                    qualified_revenue = status_amounts.get('Qualified Lead', 0)
+                    
+                    st.metric(
+                        "Qualified Lead Value",
+                        f"Rs.{qualified_revenue:,.0f}",
+                        f"From {qualified_leads:,} leads"
                     )
                 
                 # Download button for lead status metrics
@@ -4830,7 +4848,7 @@ def main():
                         
                         # Process Data (Load if either contacts or deals found)
                         if prev_contacts or prev_deals:
-                            prev_df_contacts = process_contacts_data(prev_contacts, st.session_state.owner_mapping, api_key)
+                            prev_df_contacts = process_contacts_data(prev_contacts, st.session_state.owner_mapping, api_key, start_date=prev_start, end_date=prev_end)
                             prev_df_customers = process_deals_as_customers(prev_deals, st.session_state.owner_mapping, api_key, st.session_state.deal_stages, start_date=prev_start)
                             
                             # [OK] FILTER OUT EXCLUDED OWNERS (Previous Period)
