@@ -606,7 +606,7 @@ TEAM_MAPPING = {
     ],
     "Success Squad": [
         "Remya Ravindran", "Sumithra -", "Jayasree -", "SANIJA K P", 
-        "Shubha Lakshmi", "Aneena Elsa Shibu", "Merin j"
+        "Shubha Lakshmi", "Aneena Elsa Shibu", "Merin j", "Pooja Prabhaji"
     ]
 }
 
