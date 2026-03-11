@@ -602,7 +602,7 @@ CUSTOMER_KEYWORDS_BLOCKLIST = [
 TEAM_MAPPING = {
     "Momentum Makers": [
         "Nisha Samuel", "Bindu -", "Remya Raghunath", "Jibymol Varghese", 
-        "akhila shaji", "Geethu Babu", "Arya S"
+        "akhila shaji", "Geethu Babu", "Arya S", "Parvathy R"
     ],
     "Success Squad": [
         "Remya Ravindran", "Sumithra -", "Jayasree -", "SANIJA K P", 
