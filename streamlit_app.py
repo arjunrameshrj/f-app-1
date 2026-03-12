@@ -959,6 +959,154 @@ def create_metric_6(df_contacts):
     
     return status_counts
 
+# [OK] NEW: Qualified Lead Drilldown
+def create_qualified_lead_drilldown(df_contacts):
+    """
+    Generate breakdown for Qualified Leads by Traffic Source Drill-Down 1 and Referral Status.
+    """
+    if df_contacts.empty:
+        return pd.DataFrame()
+        
+    # Filter for Qualified Leads only
+    ql_df = df_contacts[df_contacts['Lead Status'] == 'Qualified Lead'].copy()
+    
+    # [OK] NEW: Global exclusion of Service-Customer leads
+    def is_service_customer(val):
+        v = str(val).lower().strip()
+        return v in ['yes', 'true', '1', 'y', 'checked']
+        
+    if 'Service-Customer' in ql_df.columns:
+        ql_df = ql_df[~ql_df['Service-Customer'].apply(is_service_customer)]
+    
+    if ql_df.empty:
+        return pd.DataFrame()
+        
+    # Standardize Traffic Source if it's CRM or Referral related
+    def categorize_source(source):
+        s = str(source).lower().strip()
+        if not s or s == 'none': return 'Other'
+        if 'crm' in s: return 'CRM'
+        if 'referral' in s or 'refer' in s or 'reffer' in s: return 'Referral'
+        return source
+
+    ql_df['Source Category'] = ql_df['Traffic Source Drill-Down 1'].apply(categorize_source)
+    
+    # Standardize Referral Status
+    def standardize_referral(row):
+        # Look in both Referral Lead and Referred By for 'chatbot'
+        ref_lead = str(row.get('Referral Lead', '')).lower()
+        ref_by = str(row.get('Referred By', '')).lower()
+        
+        if 'chatbot' in ref_lead or 'chatbot' in ref_by:
+            return 'Chatbot'
+        if any(x in ref_lead for x in ['yes', 'true', '1', 'y', 'checked']):
+            return 'Referral'
+        return 'Sales'
+        
+    ql_df['Is Referral'] = ql_df.apply(standardize_referral, axis=1)
+    
+    # Create the matrix/cross-tab
+    pivot = ql_df.groupby(['Source Category', 'Is Referral']).size().unstack(fill_value=0)
+    
+    # Ensure Referral, Sales, and Chatbot columns exist
+    for col in ['Referral', 'Sales', 'Chatbot']:
+        if col not in pivot.columns: pivot[col] = 0
+    
+    # Add Total column
+    pivot['Total Qualified Leads'] = pivot['Referral'] + pivot['Sales'] + pivot['Chatbot']
+    
+    # Reset index for display
+    result = pivot.reset_index()
+    
+    # Sort by total descending
+    result = result.sort_values('Total Qualified Leads', ascending=False)
+    
+    # Add TOTAL row
+    if not result.empty:
+        total_row = pd.Series({
+            'Source Category': 'TOTAL',
+            'Referral': result['Referral'].sum(),
+            'Sales': result['Sales'].sum(),
+            'Chatbot': result['Chatbot'].sum(),
+            'Total Qualified Leads': result['Total Qualified Leads'].sum()
+        })
+        result = pd.concat([result, pd.DataFrame([total_row])], ignore_index=True)
+    
+    return result
+
+# [OK] NEW: CRM Owner Breakdown
+def create_crm_owner_breakdown(df_contacts):
+    """
+    Generate breakdown for CRM-sourced Qualified Leads by Course Owner.
+    """
+    if df_contacts.empty:
+        return pd.DataFrame()
+        
+    # 1. Filter for Qualified Leads only
+    ql_df = df_contacts[df_contacts['Lead Status'] == 'Qualified Lead'].copy()
+    
+    # [OK] NEW: Global exclusion of Service-Customer leads
+    def is_service_customer(val):
+        v = str(val).lower().strip()
+        return v in ['yes', 'true', '1', 'y', 'checked']
+        
+    if 'Service-Customer' in ql_df.columns:
+        ql_df = ql_df[~ql_df['Service-Customer'].apply(is_service_customer)]
+    
+    if ql_df.empty:
+        return pd.DataFrame()
+        
+    # 2. Categorize Source (reuse logic from main drilldown)
+    def categorize_source(source):
+        s = str(source).lower().strip()
+        if not s or s == 'none': return 'Other'
+        if 'crm' in s: return 'CRM'
+        if 'referral' in s or 'refer' in s or 'reffer' in s: return 'Referral'
+        return source
+
+    ql_df['Source Category'] = ql_df['Traffic Source Drill-Down 1'].apply(categorize_source)
+    
+    # 3. Filter for CRM only
+    crm_df = ql_df[ql_df['Source Category'] == 'CRM'].copy()
+    
+    if crm_df.empty:
+        return pd.DataFrame()
+        
+    # 4. Standardize Referral/Sales/Chatbot (reuse logic)
+    def standardize_referral(row):
+        ref_lead = str(row.get('Referral Lead', '')).lower()
+        ref_by = str(row.get('Referred By', '')).lower()
+        if 'chatbot' in ref_lead or 'chatbot' in ref_by: return 'Chatbot'
+        if any(x in ref_lead for x in ['yes', 'true', '1', 'y', 'checked']): return 'Referral'
+        return 'Sales'
+        
+    crm_df['Is Referral'] = crm_df.apply(standardize_referral, axis=1)
+    
+    # 5. Group by Owner (Course Owner)
+    pivot = crm_df.groupby(['Course Owner', 'Is Referral']).size().unstack(fill_value=0)
+    
+    # Ensure columns exist
+    for col in ['Referral', 'Sales', 'Chatbot']:
+        if col not in pivot.columns: pivot[col] = 0
+        
+    pivot['Total CRM Leads'] = pivot['Referral'] + pivot['Sales'] + pivot['Chatbot']
+    
+    result = pivot.reset_index()
+    result = result.sort_values('Total CRM Leads', ascending=False)
+    
+    # 6. Add TOTAL row
+    if not result.empty:
+        total_row = pd.Series({
+            'Course Owner': 'TOTAL',
+            'Referral': result['Referral'].sum(),
+            'Sales': result['Sales'].sum(),
+            'Chatbot': result['Chatbot'].sum(),
+            'Total CRM Leads': result['Total CRM Leads'].sum()
+        })
+        result = pd.concat([result, pd.DataFrame([total_row])], ignore_index=True)
+        
+    return result
+
 # [OK] NEW: Detailed Team Metrics
 def get_detailed_team_data(metric_4):
     """Return detailed DataFrames for each team with totals."""
@@ -1923,7 +2071,8 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
         "program_of_interest", "course_of_interest", "product_of_interest",
         "firstname", "lastname", "email", "phone", 
         "createdate", "lastmodifieddate", "closedate", "hs_object_id",
-        "company", "jobtitle", "country", "amount", "total_revenue"
+        "company", "jobtitle", "country", "amount", "total_revenue",
+        "hs_analytics_source_data_1", "refferal_lead_", "refferred_by", "servicecustomer"
     ]
     
     try:
@@ -2336,7 +2485,11 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None, start_date
             "Close Date": properties.get("closedate", ""),
             "Lead Status Raw": raw_lead_status,
             "Owner ID": owner_id,
-            "Amount": parsed_amount
+            "Amount": parsed_amount,
+            "Traffic Source Drill-Down 1": properties.get("hs_analytics_source_data_1", ""),
+            "Referral Lead": properties.get("refferal_lead_", ""),
+            "Referred By": properties.get("refferred_by", ""),
+            "Service-Customer": properties.get("servicecustomer", "")
         })
     
     df = pd.DataFrame(processed_data)
@@ -3864,7 +4017,7 @@ def main():
         st.divider()
         
         # [OK] ENHANCED: Create tabs with NEW METRIC 6 & 7 tab
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs([
             " Lead Analysis", 
             " Customer Analysis", 
             " Owner KPI Dashboard",
@@ -3877,7 +4030,8 @@ def main():
             " Team performance1",
             " Month Comparison", # [OK] NEW TAB FOR MONTH COMPARISON
             " Team Performance 2",
-            " This month lead performance"
+            " This month lead performance",
+            " Qualified Lead Drill-down"
         ])
         
         # SECTION 1: Lead Analysis
@@ -4821,6 +4975,76 @@ def main():
                     st.divider()
             else:
                  st.info("No team data available.")
+        
+        # [OK] NEW: SECTION 14: Qualified Lead Drill-down
+        with tab14:
+            st.markdown('<div class="section-header"><h3> Qualified Lead Drill-down (CRM & Referrals)</h3></div>', unsafe_allow_html=True)
+            
+            ql_drilldown = create_qualified_lead_drilldown(filtered_df)
+            
+            if not ql_drilldown.empty:
+                st.markdown("#### Qualified Leads by Traffic Source & Referral Status")
+                
+                # Highlight CRM, Referral and TOTAL categories
+                def highlight_special_sources(s):
+                    is_special = str(s['Source Category']).upper() in ['CRM', 'REFERRAL']
+                    is_total = str(s['Source Category']).upper() == 'TOTAL'
+                    
+                    if is_total:
+                        return ['background-color: #d4edda; font-weight: bold' for _ in s]
+                    if is_special:
+                        return ['background-color: #e8f5e9; font-weight: bold' if is_special else '' for _ in s]
+                    return ['' for _ in s]
+                st.dataframe(
+                    ql_drilldown.style.apply(highlight_special_sources, axis=1),
+                    use_container_width=True
+                )
+                
+                # [OK] NEW: CRM Owner Breakdown Section
+                st.markdown("---")
+                st.markdown("#### CRM Qualified Leads by Course Owner")
+                crm_owner_breakdown = create_crm_owner_breakdown(st.session_state.contacts_df)
+                
+                if not crm_owner_breakdown.empty:
+                    def highlight_owner_total(s):
+                        if str(s['Course Owner']).upper() == 'TOTAL':
+                            return ['background-color: #d4edda; font-weight: bold' for _ in s]
+                        return ['' for _ in s]
+                        
+                    st.dataframe(
+                        crm_owner_breakdown.style.apply(highlight_owner_total, axis=1),
+                        use_container_width=True
+                    )
+                else:
+                    st.info("No CRM-sourced Qualified Lead data available for owner breakdown.")
+                
+                # Key Stats
+                # Sourcing directly from the TOTAL row to avoid doubling and logic errors
+                total_row = ql_drilldown[ql_drilldown['Source Category'] == 'TOTAL']
+                if not total_row.empty:
+                    total_ql = total_row['Total Qualified Leads'].iloc[0]
+                    referral_ql = total_row['Referral'].iloc[0]
+                else:
+                    total_row_fallback = ql_drilldown.iloc[-1] if not ql_drilldown.empty else None
+                    if total_row_fallback is not None:
+                        total_ql = total_row_fallback['Total Qualified Leads']
+                        referral_ql = total_row_fallback['Referral']
+                    else:
+                        total_ql = 0
+                        referral_ql = 0
+                
+                crm_row = ql_drilldown[ql_drilldown['Source Category'] == 'CRM']
+                crm_ql = crm_row['Total Qualified Leads'].sum() if not crm_row.empty else 0
+                
+                col_ql1, col_ql2, col_ql3 = st.columns(3)
+                with col_ql1:
+                    st.metric("Total Qualified Leads", f"{total_ql:,}")
+                with col_ql2:
+                    st.metric("From CRM", f"{crm_ql:,}", f"{crm_ql/total_ql*100:.1f}%" if total_ql > 0 else "0%")
+                with col_ql3:
+                    st.metric("From Referral", f"{referral_ql:,}", f"{referral_ql/total_ql*100:.1f}%" if total_ql > 0 else "0%")
+            else:
+                st.info("No Qualified Lead data available for the selected filters.")
         
         # SECTION 10: Month Comparison
         with tab11:
