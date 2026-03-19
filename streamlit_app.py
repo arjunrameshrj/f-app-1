@@ -1,1791 +1,378 @@
-import streamlit as st
-import requests
+import os
+import toml
+import logging
+from datetime import datetime, timedelta
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta, date
+from flask import Flask, render_template, request, jsonify
+from flask_caching import Cache
+from google.analytics.data_v1beta import BetaAnalyticsDataClient
+from google.analytics.data_v1beta.types import DateRange, Metric, Dimension, RunReportRequest, RunRealtimeReportRequest, OrderBy
+from google.oauth2 import service_account
+import requests
 import pytz
+import concurrent.futures
 import time
-import json
-import io
-import numpy as np
-from collections import Counter
-import re
-import xlsxwriter
-from io import BytesIO
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from whitenoise import WhiteNoise
 
-# Set page config
-st.set_page_config(
-    page_title="HubSpot Business Analytics",
-    page_icon="",
-    layout="wide"
-)
 
-# UI Configuration Constants
-TOP_N = 10  # Limit charts to top N items
-MAX_LABEL_LENGTH = 25  # Truncate long labels
-CHART_HEIGHT = 420
-COLOR_PALETTE = px.colors.qualitative.Set2
+# Configure Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Excluded Course Owners
-EXCLUDED_OWNERS = [
-    "Mahalekshmi M J",
-    "Sreeja Anoop",
-    "arya.krishnan",
-    "Devi Krishna",
-    "Aneesha S",
-    "Sonia William"
-]
+app = Flask(__name__)
+app.wsgi_app = WhiteNoise(app.wsgi_app, root='static/', prefix='static/')
+app.config['TEMPLATES_AUTO_RELOAD'] = True
+app.jinja_env.auto_reload = True
+cache = Cache(app, config={'CACHE_TYPE': 'SimpleCache'})
 
-# Will be populated dynamically
-CUSTOMER_DEAL_STAGES = []  # Will contain stage IDs, not labels
+# ---------------- CONFIGURATION ----------------
+PROPERTY_ID = "281698779"
+KEY_PATH = "ga4-streamlit-connect-21d2d2cc35d6.json"
+SECRETS_PATH = ".streamlit/secrets.toml"
+CONTENT_CALENDAR_URL = "https://script.google.com/macros/s/AKfycbxShw7pKMN19c7Ou4qQb6BY_cKxNlOJAnpA2gbtngXhNig0VrU39cQ5j7e_mfEkbJqJbg/exec"
 
-# Custom CSS for better styling
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1a1a1a;
-        margin-bottom: 1rem;
-    }
-    .sub-header {
-        font-size: 1.5rem;
-        color: #666;
-        margin-bottom: 1rem;
-    }
-    .stats-card {
-        background-color: #f8f9fa;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #ff7a59;
-        margin-bottom: 1rem;
-    }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        color: white;
-        text-align: center;
-    }
-    .header-container {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 2rem;
-        border-radius: 0.5rem;
-        color: white;
-        margin-bottom: 2rem;
-    }
-    .warning-box {
-        background-color: #fff3cd;
-        color: #856404;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
-        border: 1px solid #ffeaa7;
-    }
-    .quality-high-red {
-        background-color: #f8d7da !important;
-        color: #721c24 !important;
-        font-weight: bold;
-    }
-    .quality-high-green {
-        background-color: #d4edda !important;
-        color: #155724 !important;
-        font-weight: bold;
-    }
-    .section-header {
-        background: linear-gradient(90deg, #f8f9fa 0%, #e9ecef 100%);
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 1.5rem 0 1rem 0;
-        border-left: 4px solid #4dabf7;
-    }
-    .kpi-card {
-        background: white;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border: 1px solid #dee2e6;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        text-align: center;
-    }
-    .comparison-card {
-        background: linear-gradient(135deg, #fdfcfb 0%, #e2d1c3 100%);
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        border: 1px solid #ddd;
-        margin-bottom: 1rem;
-    }
-    .unassigned-badge {
-        background-color: #ffeaa7;
-        color: #856404;
-        padding: 0.2rem 0.5rem;
-        border-radius: 0.2rem;
-        font-size: 0.8rem;
-        font-weight: bold;
-    }
-    
-    .kpi-container {
-        display: flex;
-        justify-content: center;
-        align-items: stretch;
-        gap: 20px;
-        margin: 20px 0;
-        flex-wrap: wrap;
-    }
-    
-    .kpi-box {
-        min-width: 240px; /* Increased from 220px */
-        max-width: 320px; /* Increased from 220px allows shrinking */
-        min-height: 150px; /* Changed from fixed height to min-height */
-        background: linear-gradient(135deg, #667eea, #764ba2);
-        border-radius: 12px;
-        padding: 20px; /* Increased padding */
-        text-align: center;
-        color: white;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        transition: transform 0.2s ease;
-    }
-    
-    .kpi-box:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
-    }
-    
-    .kpi-title {
-        font-size: 14px;
-        opacity: 0.9;
-        margin-bottom: 8px;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    
-    .kpi-value {
-        font-size: 28px !important; /* Reduced from 34px to prevent wrapping */
-        font-weight: 700 !important;
-        line-height: 1.2 !important;
-        margin: 8px 0;
-        word-wrap: break-word; /* Ensure long numbers wrap gracefully if needed */
-    }
-    
-    .kpi-sub {
-        font-size: 13px;
-        opacity: 0.85;
-        margin-top: 5px;
-    }
-    
-    .kpi-box-blue {
-        background: linear-gradient(135deg, #4A6FA5, #166088);
-    }
-    
-    .kpi-box-green {
-        background: linear-gradient(135deg, #2E8B57, #3CB371);
-    }
-    
-    .kpi-box-orange {
-        background: linear-gradient(135deg, #FF7A59, #FFA500);
-    }
-    
-    .kpi-box-purple {
-        background: linear-gradient(135deg, #8A2BE2, #9370DB);
-    }
-    
-    .kpi-box-teal {
-        background: linear-gradient(135deg, #20B2AA, #48D1CC);
-    }
-    
-    .kpi-box-red {
-        background: linear-gradient(135deg, #DC143C, #FF6347);
-    }
-    
-    .kpi-box-yellow {
-        background: linear-gradient(135deg, #FFD700, #FFA500);
-    }
-    
-    .secondary-kpi-container {
-        display: flex;
-        justify-content: center;
-        gap: 15px;
-        margin: 15px 0;
-        flex-wrap: wrap;
-    }
-    
-    .secondary-kpi-box {
-        min-width: 150px !important;
-        max-width: 150px !important;
-        height: 100px !important;
-        background: linear-gradient(135deg, #f8f9fa, #e9ecef);
-        border-radius: 8px;
-        padding: 12px;
-        text-align: center;
-        color: #333;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        border: 1px solid #dee2e6;
-    }
-    
-    .secondary-kpi-title {
-        font-size: 12px;
-        opacity: 0.8;
-        margin-bottom: 5px;
-        font-weight: 500;
-    }
-    
-    .secondary-kpi-value {
-        font-size: 24px !important;
-        font-weight: 700 !important;
-        line-height: 1.2 !important;
-        margin: 3px 0;
-    }
-    
-    .secondary-kpi-sub {
-        font-size: 11px;
-        opacity: 0.7;
-        margin-top: 3px;
-    }
-    
-    .revenue-kpi {
-        background: linear-gradient(135deg, #FFD700, #FFA500);
-    }
-    
-    .conversion-kpi {
-        background: linear-gradient(135deg, #20B2AA, #48D1CC);
-    }
-    
-    .deal-kpi {
-        background: linear-gradient(135deg, #9370DB, #8A2BE2);
-    }
-    
-    .warning-card {
-        background: linear-gradient(135deg, #fff3cd, #ffeaa7);
-        border: 1px solid #ffc107;
-        border-radius: 8px;
-        padding: 15px;
-        margin: 10px 0;
-    }
-    
-    .success-card {
-        background: linear-gradient(135deg, #d4edda, #c3e6cb);
-        border: 1px solid #28a745;
-        border-radius: 8px;
-        padding: 15px;
-        margin: 10px 0;
-    }
-    
-    .error-card {
-        background: linear-gradient(135deg, #f8d7da, #f5c6cb);
-        border: 1px solid #dc3545;
-        border-radius: 8px;
-        padding: 15px;
-        margin: 10px 0;
-    }
-    
-    .data-fix-card {
-        background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
-        border: 1px solid #4f46e5;
-        border-radius: 8px;
-        padding: 15px;
-        margin: 10px 0;
-    }
-    
-    /* [OK] NEW: Revenue and Matrix Styles */
-    .revenue-card {
-        background: linear-gradient(135deg, #4CAF50, #8BC34A);
-        color: white;
-        padding: 1.5rem;
-        border-radius: 10px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        text-align: center;
-    }
-    
-    .matrix-star {
-        background-color: #d4edda !important;
-        color: #155724 !important;
-        font-weight: bold;
-    }
-    
-    .matrix-potential {
-        background-color: #cce5ff !important;
-        color: #004085 !important;
-        font-weight: bold;
-    }
-    
-    .matrix-burn {
-        background-color: #fff3cd !important;
-        color: #856404 !important;
-        font-weight: bold;
-    }
-    
-    .matrix-weak {
-        background-color: #f8d7da !important;
-        color: #721c24 !important;
-        font-weight: bold;
-    }
-    
-    /* [OK] NEW: Download Button Styles */
-    .download-btn {
-        background: linear-gradient(135deg, #28a745, #20c997);
-        color: white;
-        border: none;
-        padding: 0.75rem 1.5rem;
-        border-radius: 0.5rem;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 0.5rem;
-        text-decoration: none;
-    }
-    
-    .download-btn:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
-        color: white;
-        text-decoration: none;
-    }
-    
-    .download-btn-excel {
-        background: linear-gradient(135deg, #217346, #1e7e34);
-    }
-    
-    .download-btn-csv {
-        background: linear-gradient(135deg, #007bff, #0056b3);
-    }
-    
-    .download-btn-all {
-        background: linear-gradient(135deg, #6f42c1, #6610f2);
-    }
-    
-    .download-section {
-        background: linear-gradient(135deg, #f8f9fa, #e9ecef);
-        padding: 1.5rem;
-        border-radius: 0.75rem;
-        border: 1px solid #dee2e6;
-        margin: 1.5rem 0;
-    }
-    
-    .download-header {
-        color: #2c3e50;
-        font-size: 1.25rem;
-        margin-bottom: 1rem;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }
-    
-    /* [OK] NEW: Owner Visualization Styles */
-    .owner-scorecard {
-        background: linear-gradient(135deg, #667eea, #764ba2);
-        color: white;
-        padding: 1.5rem;
-        border-radius: 12px;
-        margin: 1rem 0;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        text-align: center;
-    }
-    
-    .owner-scorecard-green {
-        background: linear-gradient(135deg, #2E8B57, #3CB371);
-    }
-    
-    .owner-scorecard-blue {
-        background: linear-gradient(135deg, #4A6FA5, #166088);
-    }
-    
-    .owner-scorecard-orange {
-        background: linear-gradient(135deg, #FF7A59, #FFA500);
-    }
-    
-    .owner-scorecard-purple {
-        background: linear-gradient(135deg, #8A2BE2, #9370DB);
-    }
-    
-    .owner-ranking-gold {
-        background: linear-gradient(135deg, #FFD700, #FFA500);
-    }
-    
-    .owner-ranking-silver {
-        background: linear-gradient(135deg, #C0C0C0, #A9A9A9);
-    }
-    
-    .owner-ranking-bronze {
-        background: linear-gradient(135deg, #CD7F32, #A0522D);
-    }
-    
-    .owner-visual-section {
-        background: linear-gradient(135deg, #f8f9fa, #e9ecef);
-        padding: 1.5rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        border: 1px solid #dee2e6;
-    }
-    
-    /* [OK] NEW: Lead Status Metrics Styles - FIXED */
-    .lead-status-metric {
-        background: linear-gradient(135deg, #ffffff, #f8f9fa);
-        border-radius: 10px;
-        padding: 15px;
-        margin: 10px 0;
-        border: 1px solid #dee2e6;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-    }
-    
-    .lead-status-header {
-        background: linear-gradient(90deg, #6a11cb 0%, #2575fc 100%);
-        color: white;
-        padding: 10px 15px;
-        border-radius: 8px 8px 0 0;
-        margin: -15px -15px 15px -15px;
-        font-weight: bold;
-        text-align: center;
-    }
-    
-    .status-card {
-        background: white;
-        border-radius: 8px;
-        padding: 12px;
-        margin: 8px 0;
-        border-left: 4px solid;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    
-    .status-card-hot {
-        border-left-color: #dc3545;
-        background: linear-gradient(135deg, #fff5f5, #ffe5e5);
-    }
-    
-    .status-card-warm {
-        border-left-color: #fd7e14;
-        background: linear-gradient(135deg, #fff9f0, #ffe8cc);
-    }
-    
-    .status-card-cold {
-        border-left-color: #0d6efd;
-        background: linear-gradient(135deg, #f0f8ff, #cfe2ff);
-    }
-    
-    .status-card-new {
-        border-left-color: #20c997;
-        background: linear-gradient(135deg, #f0fff4, #d1f7e8);
-    }
-    
-    .status-card-not-interested {
-        border-left-color: #6c757d;
-        background: linear-gradient(135deg, #f8f9fa, #e9ecef);
-    }
-    
-    .status-card-not-connected {
-        border-left-color: #6f42c1;
-        background: linear-gradient(135deg, #f8f7ff, #e2d9f3);
-    }
-    
-    .status-card-not-qualified {
-        border-left-color: #17a2b8;
-        background: linear-gradient(135deg, #f0fcff, #c7f1f8);
-    }
-    
-    .status-card-qualified {
-        border-left-color: #28a745;
-        background: linear-gradient(135deg, #f0fff4, #d4edda);
-    }
-    
-    .status-card-duplicate {
-        border-left-color: #ffc107;
-        background: linear-gradient(135deg, #fffcf0, #fff3cd);
-    }
-    
-    .status-card-upselling {
-        border-left-color: #9c27b0;
-        background: linear-gradient(135deg, #f3e5f5, #e1bee7);
-    }
-    
-    .status-card-course-shifting {
-        border-left-color: #795548;
-        background: linear-gradient(135deg, #efebe9, #d7ccc8);
-    }
-    
-    .status-card-unknown {
-        border-left-color: #607d8b;
-        background: linear-gradient(135deg, #eceff1, #cfd8dc);
-    }
-
-    .status-card-closed-lost {
-        border-left-color: #343a40 !important;
-        background: linear-gradient(135deg, #e9ecef, #dee2e6) !important;
-        color: #495057;
-    }
-    
-    .status-count {
-        font-size: 24px;
-        font-weight: bold;
-        margin: 5px 0;
-    }
-    
-    .status-percentage {
-        font-size: 14px;
-        color: #6c757d;
-        margin-top: 5px;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Constants
-HUBSPOT_API_BASE = "https://api.hubapi.com"
-IST = pytz.timezone('Asia/Kolkata')
-
-# [OK] SECURITY: Load API key from Streamlit secrets
-def get_api_key():
-    """Safely load API key from Streamlit secrets"""
-    try:
-        if "hubspot" in st.secrets and "api_key" in st.secrets["hubspot"]:
-            api_key = st.secrets["hubspot"]["api_key"]
-            if api_key and api_key.startswith("pat-"):
-                return api_key
-        
-        if "HUBSPOT_API_KEY" in st.secrets:
-            api_key = st.secrets["HUBSPOT_API_KEY"]
-            if api_key and api_key.startswith("pat-"):
-                return api_key
-        
-        import os
-        api_key = os.getenv("HUBSPOT_API_KEY")
-        if api_key and api_key.startswith("pat-"):
-            return api_key
-        
-        return None
-        
-    except Exception as e:
-        st.error(f"Error loading API key: {str(e)}")
-        return None
-
-# [OK] CRITICAL FIX: Lead Status Mapping - ABSOLUTELY NO CUSTOMER HERE!
+# [OK] Calibration Constants from nn.txt
 LEAD_STATUS_MAP = {
-    "cold": "Cold",
-    "warm": "Warm", 
-    "hot": "Hot",
-    "new": "New Lead",
-    "open": "New Lead",
-    "neutral_prospect": "Cold",
-    "prospect": "Warm",  
-    "hot_prospect": "Hot",
-    "not_connected": "Not Connected",
-    "not_interested": "Not Interested", 
-    "unqualified": "Not Qualified",
-    "not_qualified": "Not Qualified",
+    "not_interest": "Not Interested",
+    "not_qualif": "Not Qualified",
+    "unqualif": "Not Qualified",
     "duplicate": "Duplicate",
     "junk": "Duplicate",
-    "": "Unknown",
-    None: "Unknown",
-    "unknown": "Unknown",
-    "other": "Unknown",
-    "qualified_lead": "Not Qualified",
-    "upselling": "Upselling",
-    "course_shifting": "Course Shifting",
-    "not connected (nc)": "Not Connected (NC)",
-    "not connected (nc)": "Not Connected (NC)",
-    "closed lost": "Closed Lost",
-    "closed_lost": "Closed Lost"
+    "new": "New Lead",
+    "open": "New Lead",
+    "qualified": "Not Qualified",
+    "not_connect": "Not Connected (NC)",
+    "nc": "Not Connected (NC)"
 }
 
-# [OK] CRITICAL FIX: List of terms that should NEVER become "Customer" in leads
 CUSTOMER_KEYWORDS_BLOCKLIST = [
-    "customer", "closed", "won", "admission", "confirmed", 
-    "contract", "signed", "paid", "payment", "completed"
+    "admission", "confirmed", "customer", "closed won", "closedwon", "won", "converted"
 ]
 
-# [OK] NEW: Team Definitions
-TEAM_MAPPING = {
-    "Momentum Makers": [
-        "Nisha Samuel", "Bindu -", "Remya Raghunath", "Jibymol Varghese", 
-        "akhila shaji", "Geethu Babu", "Arya S", "Parvathy R"
-    ],
-    "Success Squad": [
-        "Remya Ravindran", "Sumithra -", "Jayasree -", "SANIJA K P", 
-        "Shubha Lakshmi", "Aneena Elsa Shibu", "Merin j", "Pooja Prabhaji"
-    ]
-}
+# [OK] Statuses that should NOT count towards Total Leads or Deal Leads
+LEAD_EXCLUSION_STATUSES = [
+    "Not Connected", "Not Connected (NC)", "Not Interested", "Not Qualified", "Duplicate", "Closed Lost", "None", "Unknown"
+]
 
-# [OK] NEW: KPI Rendering Functions
-def render_kpi(title, value, subtitle="", color_class=""):
-    """Render a professional KPI card with fixed size."""
-    color_class = color_class or ""
-    return f"""
-    <div class="kpi-box {color_class}">
-        <div class="kpi-title">{title}</div>
-        <div class="kpi-value">{value}</div>
-        <div class="kpi-sub">{subtitle}</div>
-    </div>
-    """
-
-def render_secondary_kpi(title, value, subtitle=""):
-    """Render a smaller secondary KPI card."""
-    return f"""
-    <div class="secondary-kpi-box">
-        <div class="secondary-kpi-title">{title}</div>
-        <div class="secondary-kpi-value">{value}</div>
-        <div class="secondary-kpi-sub">{subtitle}</div>
-    </div>
-    """
-
-def render_kpi_row(kpis, container_class="kpi-container"):
-    """Render a row of KPI cards."""
-    kpi_html = "".join(kpis)
-    return f"""
-    <div class="{container_class}">
-        {kpi_html}
-    </div>
-    """
-
-# [OK] NEW: Lead Status Count Display Function - FIXED
-def render_lead_status_metrics(status_counts, total_leads, status_amounts=None):
-    """Render lead status metrics in a visually appealing format with optional amounts."""
-    if status_counts.empty or total_leads == 0:
-        return "<div>No lead status data available</div>"
-    
-    status_amounts = status_amounts or {}
-    
-    # Define status display order and colors
-    status_config = {
-        "Hot": {"class": "status-card-hot", "icon": ""},
-        "Warm": {"class": "status-card-warm", "icon": ""},
-        "Cold": {"class": "status-card-cold", "icon": ""},
-        "New Lead": {"class": "status-card-new", "icon": "[New]"},
-        "New Lead": {"class": "status-card-new", "icon": "[New]"},
-        "Not Interested": {"class": "status-card-not-interested", "icon": ""},
-        "Not Interested": {"class": "status-card-not-interested", "icon": ""},
-        "Not Connected (NC)": {"class": "status-card-not-connected", "icon": ""},
-        "Not Qualified": {"class": "status-card-not-qualified", "icon": ""},
-        "Closed Lost": {"class": "status-card-closed-lost", "icon": ""},
-        "Duplicate": {"class": "status-card-duplicate", "icon": ""},
-        "Upselling": {"class": "status-card-upselling", "icon": ""},
-        "Course Shifting": {"class": "status-card-course-shifting", "icon": ""},
-        "Unknown": {"class": "status-card-unknown", "icon": "?"}
-    }
-    
-    html = """
-    <div class="lead-status-metric">
-        <div class="lead-status-header">
-            <h3 style="margin: 0; font-size: 1.2rem;"> Lead Status Distribution</h3>
-        </div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
-    """
-    
-    # Sort by count descending
-    sorted_statuses = status_counts.sort_values(ascending=False)
-    
-    for status, count in sorted_statuses.items():
-        status_str = str(status)
-        if status_str in status_config:
-            config = status_config[status_str]
-            status_class = config["class"]
-            icon = config["icon"]
-        else:
-            # Default styling for unknown statuses
-            status_class = "status-card-unknown"
-            icon = ""
-        
-        percentage = (count / total_leads * 100) if total_leads > 0 else 0
-        
-        # [OK] NEW: Show Amount if available for this status
-        revenue_text = ""
-        if status_str in status_amounts and status_amounts[status_str] > 0:
-            revenue_text = f'<div style="font-size: 0.85rem; color: #28a745; font-weight: bold; margin-top: 5px;">Rs.{status_amounts[status_str]:,.0f}</div>'
-
-        html += f'<div class="status-card {status_class}">'
-        html += '<div style="display: flex; justify-content: space-between; align-items: center;">'
-        html += '<div>'
-        html += f'<div style="font-size: 0.9rem; color: #6c757d; margin-bottom: 5px;">{icon} {status_str}</div>'
-        html += f'<div class="status-count">{count:,}</div>'
-        html += revenue_text
-        html += '</div>'
-        html += '<div style="text-align: right;">'
-        html += '<div style="font-size: 1.8rem; font-weight: bold; color: #2c3e50;">'
-        html += f'{percentage:.1f}%</div>'
-        html += '</div>'
-        html += '</div>'
-        html += f'<div class="status-percentage">{percentage:.1f}% of total leads</div>'
-        html += '</div>'
-    
-    html += """
-        </div>
-        <div style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px; font-size: 0.9rem; color: #6c757d;">
-            <strong>" Summary:</strong> Total of {total_leads:,} leads categorized by status
-        </div>
-    </div>
-    """.format(total_leads=total_leads)
-    
-    return html
-
-# [OK] NEW: Enhanced Excel Export Function
-def create_excel_report(df_contacts, df_customers, metrics, kpis, date_range, date_field):
-    """Create a professional Excel report with multiple sheets and formatting."""
-    
-    # Create an in-memory BytesIO object
-    output = BytesIO()
-    
-    # Create Excel writer with XlsxWriter engine
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        workbook = writer.book
-        
-        # Define formats
-        header_format = workbook.add_format({
-            'bold': True,
-            'font_size': 12,
-            'bg_color': '#4F81BD',
-            'font_color': 'white',
-            'align': 'center',
-            'valign': 'vcenter',
-            'border': 1
-        })
-        
-        number_format = workbook.add_format({
-            'num_format': '#,##0',
-            'align': 'right',
-            'border': 1
-        })
-        
-        percent_format = workbook.add_format({
-            'num_format': '0.0%',
-            'align': 'right',
-            'border': 1
-        })
-        
-        # Sheet 1: Executive Summary
-        summary_data = {
-            'Metric': [
-                'Total Leads',
-                'Deal Leads (Hot+Warm+Cold+Customer)',
-                'Customers',
-                'Hot Leads',
-                'Warm Leads', 
-                'Cold Leads',
-                'New Leads',
-                'Not Connected',
-                'Not Interested',
-                'Not Qualified',
-                'Duplicate',
-                'Lead -> Deal %',
-                'Lead -> Customer %',
-                'Deal -> Customer %',
-                'Total Revenue',
-                'Avg Revenue per Customer'
-            ],
-            'Count': [
-                kpis['total_leads'],
-                kpis['deal_leads'],
-                kpis['customer'],
-                kpis['hot'],
-                kpis['warm'],
-                kpis['cold'],
-                kpis['new_lead'],
-                kpis['not_connected'],
-                kpis['not_interested'],
-                kpis['not_qualified'],
-                kpis['duplicate'],
-                kpis['lead_to_deal_pct']/100,
-                kpis['lead_to_customer_pct']/100,
-                kpis['deal_to_customer_pct']/100,
-                kpis['total_revenue'],
-                kpis['avg_revenue_per_customer'] if kpis['avg_revenue_per_customer'] > 0 else 0
-            ]
+# Load Secrets
+try:
+    if os.path.exists(SECRETS_PATH):
+        secrets = toml.load(SECRETS_PATH)
+    else:
+        # Fallback to reconstructing secrets from Environment Variables (for AWS)
+        secrets = {
+            "kajabi": {
+                "client_id": os.environ.get("KAJABI_CLIENT_ID"),
+                "client_secret": os.environ.get("KAJABI_CLIENT_SECRET")
+            },
+            "hubspot": {
+                "token": os.environ.get("HUBSPOT_TOKEN")
+            },
+            "ga4": {
+                "property_id": os.environ.get("GA4_PROPERTY_ID", PROPERTY_ID)
+            },
+            "ga4_key": {
+                "type": os.environ.get("GA4_TYPE"),
+                "project_id": os.environ.get("GA4_PROJECT_ID"),
+                "private_key_id": os.environ.get("GA4_PRIVATE_KEY_ID"),
+                "private_key": os.environ.get("GA4_PRIVATE_KEY", "").replace("\\n", "\n"),
+                "client_email": os.environ.get("GA4_CLIENT_EMAIL"),
+                "client_id": os.environ.get("GA4_CLIENT_ID"),
+                "auth_uri": os.environ.get("GA4_AUTH_URI"),
+                "token_uri": os.environ.get("GA4_TOKEN_URI"),
+                "auth_provider_x509_cert_url": os.environ.get("GA4_AUTH_CERT_URL"),
+                "client_x509_cert_url": os.environ.get("GA4_CLIENT_CERT_URL")
+            }
         }
-        
-        summary_df = pd.DataFrame(summary_data)
-        summary_df.to_excel(writer, sheet_name='Executive Summary', index=False)
-        
-        worksheet = writer.sheets['Executive Summary']
-        
-        # Apply formatting
-        for col_num, value in enumerate(summary_df.columns.values):
-            worksheet.write(0, col_num, value, header_format)
-        
-        # Set column widths
-        worksheet.set_column('A:A', 35)
-        worksheet.set_column('B:B', 20)
-        
-        # Add report header
-        worksheet.merge_range('D1:F1', 'HubSpot Analytics Report', workbook.add_format({
-            'bold': True, 'font_size': 16, 'align': 'center', 'valign': 'vcenter'
-        }))
-        
-        worksheet.merge_range('D2:F2', f'Date Field: {date_field}', workbook.add_format({
-            'align': 'center'
-        }))
-        
-        worksheet.merge_range('D3:F3', f'Date Range: {date_range[0]} to {date_range[1]}', workbook.add_format({
-            'align': 'center'
-        }))
-        
-        worksheet.merge_range('D4:F4', f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', workbook.add_format({
-            'align': 'center'
-        }))
-        
-        # Sheet 2: Raw Lead Data
-        if not df_contacts.empty:
-            df_contacts.to_excel(writer, sheet_name='Raw Lead Data', index=False)
-            worksheet = writer.sheets['Raw Lead Data']
-            
-            # Apply formatting
-            for col_num, value in enumerate(df_contacts.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-            
-            # Auto-adjust column widths
-            for i, col in enumerate(df_contacts.columns):
-                column_len = max(df_contacts[col].astype(str).map(len).max(), len(col)) + 2
-                worksheet.set_column(i, i, min(column_len, 50))
-        
-        # Sheet 3: Customer Data
-        if df_customers is not None and not df_customers.empty:
-            df_customers.to_excel(writer, sheet_name='Customer Data', index=False)
-            worksheet = writer.sheets['Customer Data']
-            
-            for col_num, value in enumerate(df_customers.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-        
-        # Sheet 4: Owner Performance (Metric 4)
-        if 'metric_4' in metrics and not metrics['metric_4'].empty:
-            metric_4 = metrics['metric_4'].copy()
-            metric_4.to_excel(writer, sheet_name='Owner Performance', index=False)
-            
-            worksheet = writer.sheets['Owner Performance']
-            for col_num, value in enumerate(metric_4.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-            
-            # Format percentages
-            percent_columns = ['Deal %', 'Customer %', 'Lead->Customer %', 'Lead->Deal %']
-            num_rows = len(metric_4)
-            num_cols = len(metric_4.columns)
-            
-            for row in range(1, num_rows + 1):
-                for col in range(num_cols):
-                    col_name = metric_4.columns[col]
-                    if col_name in percent_columns:
-                        value = metric_4.iloc[row-1, col]
-                        if pd.notnull(value):
-                            worksheet.write(row, col, value/100, percent_format)
-                    elif col_name not in ['Course Owner'] and col_name != 'Customer_Revenue':
-                        value = metric_4.iloc[row-1, col]
-                        if pd.notnull(value):
-                            worksheet.write(row, col, value, number_format)
-        
-        # Sheet 5: Course Performance (NEW METRIC)
-        if 'metric_5' in metrics and not metrics['metric_5'].empty:
-            metric_5 = metrics['metric_5'].copy()
-            metric_5.to_excel(writer, sheet_name='Course Performance', index=False)
-            
-            worksheet = writer.sheets['Course Performance']
-            for col_num, value in enumerate(metric_5.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-            
-            # Format percentages
-            percent_columns = ['Deal %', 'Customer %', 'Lead->Customer %', 'Lead->Deal %']
-            num_rows = len(metric_5)
-            num_cols = len(metric_5.columns)
-            
-            for row in range(1, num_rows + 1):
-                for col in range(num_cols):
-                    col_name = metric_5.columns[col]
-                    if col_name in percent_columns:
-                        value = metric_5.iloc[row-1, col]
-                        if pd.notnull(value):
-                            worksheet.write(row, col, value/100, percent_format)
-                    elif col_name not in ['Course'] and col_name != 'Customer_Revenue':
-                        value = metric_5.iloc[row-1, col]
-                        if pd.notnull(value):
-                            worksheet.write(row, col, value, number_format)
-        
-        # Sheet 6: Lead Status Summary
-        if not df_contacts.empty:
-            status_summary = df_contacts['Lead Status'].value_counts().reset_index()
-            status_summary.columns = ['Lead Status', 'Count']
-            status_summary['Percentage'] = (status_summary['Count'] / len(df_contacts) * 100).round(1)
-            
-            status_summary.to_excel(writer, sheet_name='Lead Status Summary', index=False)
-            
-            worksheet = writer.sheets['Lead Status Summary']
-            for col_num, value in enumerate(status_summary.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-            
-            # Format percentages
-            for row in range(1, len(status_summary) + 1):
-                worksheet.write(row, 2, status_summary.iloc[row-1, 2]/100, percent_format)
-                worksheet.write(row, 1, status_summary.iloc[row-1, 1], number_format)
-        
-        # Sheet 7: Revenue Analysis
-        if df_customers is not None and not df_customers.empty:
-            revenue_summary = df_customers.groupby('Course/Program').agg(
-                Customer_Count=('Is Customer', 'count'),
-                Total_Revenue=('Amount', 'sum'),
-                Avg_Revenue=('Amount', 'mean')
-            ).reset_index()
-            
-            revenue_summary = revenue_summary.sort_values('Total_Revenue', ascending=False)
-            revenue_summary.to_excel(writer, sheet_name='Revenue Analysis', index=False)
-            
-            worksheet = writer.sheets['Revenue Analysis']
-            for col_num, value in enumerate(revenue_summary.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-            
-            # Format revenue columns
-            for row in range(1, len(revenue_summary) + 1):
-                worksheet.write(row, 2, revenue_summary.iloc[row-1, 2], number_format)
-                worksheet.write(row, 3, revenue_summary.iloc[row-1, 3], number_format)
-    
-    # Get the Excel data
-    excel_data = output.getvalue()
-    return excel_data
+except Exception as e:
+    logger.error(f"Failed to load secrets: {e}")
+    secrets = {}
 
-# [OK] NEW: Lead Status Metrics Function
-def create_metric_6(df_contacts):
-    """METRIC 6: Lead Status Count Breakdown"""
-    if df_contacts.empty or 'Lead Status' not in df_contacts.columns:
-        return pd.DataFrame()
-    
-    # Get all lead status counts
-    status_counts = df_contacts['Lead Status'].value_counts().reset_index()
-    status_counts.columns = ['Lead Status', 'Count']
-    
-    # Calculate percentages
-    total_leads = len(df_contacts)
-    status_counts['Percentage'] = (status_counts['Count'] / total_leads * 100).round(2)
-    
-    # Order by count descending
-    status_counts = status_counts.sort_values('Count', ascending=False)
-    
-    return status_counts
+# ---------------- AUTHENTICATION ----------------
+def get_ga4_client():
+    if os.path.exists(KEY_PATH):
+        try:
+            credentials = service_account.Credentials.from_service_account_file(KEY_PATH)
+            return BetaAnalyticsDataClient(credentials=credentials)
+        except Exception as e:
+            logger.error(f"Local key error: {e}")
 
-# [OK] NEW: Qualified Lead Drilldown
-def create_qualified_lead_drilldown(df_contacts):
-    """
-    Generate breakdown for Qualified Leads by Traffic Source Drill-Down 1 and Referral Status.
-    """
-    if df_contacts.empty:
-        return pd.DataFrame()
-        
-    # Filter for Qualified Leads only
-    ql_df = df_contacts[df_contacts['Lead Status'] == 'Qualified Lead'].copy()
-    
-    # [OK] NEW: Global exclusion of Service-Customer leads
-    def is_service_customer(val):
-        v = str(val).lower().strip()
-        return v in ['yes', 'true', '1', 'y', 'checked']
-        
-    if 'Service-Customer' in ql_df.columns:
-        ql_df = ql_df[~ql_df['Service-Customer'].apply(is_service_customer)]
-    
-    if ql_df.empty:
-        return pd.DataFrame()
-        
-    # Standardize Traffic Source if it's CRM or Referral related
-    def categorize_source(source):
-        s = str(source).lower().strip()
-        if not s or s == 'none': return 'Other'
-        if 'crm' in s: return 'CRM'
-        if 'referral' in s or 'refer' in s or 'reffer' in s: return 'Referral'
-        return source
+    if "ga4_key" in secrets:
+        try:
+            credentials = service_account.Credentials.from_service_account_info(secrets["ga4_key"])
+            return BetaAnalyticsDataClient(credentials=credentials)
+        except Exception as e:
+            logger.error(f"Secrets key error: {e}")
+    return None
 
-    ql_df['Source Category'] = ql_df['Traffic Source Drill-Down 1'].apply(categorize_source)
-    
-    # Standardize Referral Status
-    def standardize_referral(row):
-        # Look in both Referral Lead and Referred By for 'chatbot'
-        ref_lead = str(row.get('Referral Lead', '')).lower()
-        ref_by = str(row.get('Referred By', '')).lower()
-        
-        if 'chatbot' in ref_lead or 'chatbot' in ref_by:
-            return 'Chatbot'
-        if any(x in ref_lead for x in ['yes', 'true', '1', 'y', 'checked']):
-            return 'Referral'
-        return 'Sales'
-        
-    ql_df['Is Referral'] = ql_df.apply(standardize_referral, axis=1)
-    
-    # Create the matrix/cross-tab
-    pivot = ql_df.groupby(['Source Category', 'Is Referral']).size().unstack(fill_value=0)
-    
-    # Ensure Referral, Sales, and Chatbot columns exist
-    for col in ['Referral', 'Sales', 'Chatbot']:
-        if col not in pivot.columns: pivot[col] = 0
-    
-    # Add Total column
-    pivot['Total Qualified Leads'] = pivot['Referral'] + pivot['Sales'] + pivot['Chatbot']
-    
-    # Reset index for display
-    result = pivot.reset_index()
-    
-    # Sort by total descending
-    result = result.sort_values('Total Qualified Leads', ascending=False)
-    
-    # Add TOTAL row
-    if not result.empty:
-        total_row = pd.Series({
-            'Source Category': 'TOTAL',
-            'Referral': result['Referral'].sum(),
-            'Sales': result['Sales'].sum(),
-            'Chatbot': result['Chatbot'].sum(),
-            'Total Qualified Leads': result['Total Qualified Leads'].sum()
-        })
-        result = pd.concat([result, pd.DataFrame([total_row])], ignore_index=True)
-    
-    return result
+client = get_ga4_client()
 
-# [OK] NEW: CRM Owner Breakdown
-def create_crm_owner_breakdown(df_contacts):
-    """
-    Generate breakdown for CRM-sourced Qualified Leads by Course Owner.
-    """
-    if df_contacts.empty:
-        return pd.DataFrame()
-        
-    # 1. Filter for Qualified Leads only
-    ql_df = df_contacts[df_contacts['Lead Status'] == 'Qualified Lead'].copy()
-    
-    # [OK] NEW: Global exclusion of Service-Customer leads
-    def is_service_customer(val):
-        v = str(val).lower().strip()
-        return v in ['yes', 'true', '1', 'y', 'checked']
-        
-    if 'Service-Customer' in ql_df.columns:
-        ql_df = ql_df[~ql_df['Service-Customer'].apply(is_service_customer)]
-    
-    if ql_df.empty:
-        return pd.DataFrame()
-        
-    # 2. Categorize Source (reuse logic from main drilldown)
-    def categorize_source(source):
-        s = str(source).lower().strip()
-        if not s or s == 'none': return 'Other'
-        if 'crm' in s: return 'CRM'
-        if 'referral' in s or 'refer' in s or 'reffer' in s: return 'Referral'
-        return source
-
-    ql_df['Source Category'] = ql_df['Traffic Source Drill-Down 1'].apply(categorize_source)
-    
-    # 3. Filter for CRM only
-    crm_df = ql_df[ql_df['Source Category'] == 'CRM'].copy()
-    
-    if crm_df.empty:
-        return pd.DataFrame()
-        
-    # 4. Standardize Referral/Sales/Chatbot (reuse logic)
-    def standardize_referral(row):
-        ref_lead = str(row.get('Referral Lead', '')).lower()
-        ref_by = str(row.get('Referred By', '')).lower()
-        if 'chatbot' in ref_lead or 'chatbot' in ref_by: return 'Chatbot'
-        if any(x in ref_lead for x in ['yes', 'true', '1', 'y', 'checked']): return 'Referral'
-        return 'Sales'
-        
-    crm_df['Is Referral'] = crm_df.apply(standardize_referral, axis=1)
-    
-    # 5. Group by Owner (Course Owner)
-    pivot = crm_df.groupby(['Course Owner', 'Is Referral']).size().unstack(fill_value=0)
-    
-    # Ensure columns exist
-    for col in ['Referral', 'Sales', 'Chatbot']:
-        if col not in pivot.columns: pivot[col] = 0
-        
-    pivot['Total CRM Leads'] = pivot['Referral'] + pivot['Sales'] + pivot['Chatbot']
-    
-    result = pivot.reset_index()
-    result = result.sort_values('Total CRM Leads', ascending=False)
-    
-    # 6. Add TOTAL row
-    if not result.empty:
-        total_row = pd.Series({
-            'Course Owner': 'TOTAL',
-            'Referral': result['Referral'].sum(),
-            'Sales': result['Sales'].sum(),
-            'Chatbot': result['Chatbot'].sum(),
-            'Total CRM Leads': result['Total CRM Leads'].sum()
-        })
-        result = pd.concat([result, pd.DataFrame([total_row])], ignore_index=True)
-        
-    return result
-
-# [OK] NEW: Detailed Team Metrics
-def get_detailed_team_data(metric_4):
-    """Return detailed DataFrames for each team with totals."""
-    if metric_4.empty:
-        return {}
-    
-    team_results = {}
-    
-    for team_name, members in TEAM_MAPPING.items():
-        # Case insensitive matching
-        team_members_lower = [m.lower() for m in members]
-        
-        # Filter data
-        if 'Course Owner' not in metric_4.columns:
-            continue
-            
-        team_df = metric_4[metric_4['Course Owner'].str.lower().isin(team_members_lower)].copy()
-        
-        if team_df.empty:
-            team_results[team_name] = pd.DataFrame()
-            continue
-            
-        # [OK] NEW: Calculate Conversion Metrics for Team Members
-        # Note: 'Hot', 'Warm', 'Cold' from contacts might not match 'Hot_Customer' from deals
-        # So we display the conversion count primarily, or ratio if possible.
-        
-        if 'Hot_Customer' in team_df.columns:
-            # Denominator: Hot Leads (Contacts) + Converted Hot (Deals) isn't perfect but best proxy
-            # If 'Hot' column exists from Metric 2 (Contacts)
-            hot_contacts = team_df['Hot'] if 'Hot' in team_df.columns else 0
-            
-            team_df['HOT-CUSTOMER CONVERSION'] = np.where(
-                (hot_contacts + team_df['Hot_Customer']) > 0,
-                (team_df['Hot_Customer'] / (hot_contacts + team_df['Hot_Customer']) * 100).round(2),
-                0
-            )
-
-        if 'Warm_Customer' in team_df.columns:
-            warm_contacts = team_df['Warm'] if 'Warm' in team_df.columns else 0
-            
-            team_df['WARM-CUSTOMER CONVERSION'] = np.where(
-                (warm_contacts + team_df['Warm_Customer']) > 0,
-                (team_df['Warm_Customer'] / (warm_contacts + team_df['Warm_Customer']) * 100).round(2),
-                0
-            )
-
-        if 'Cold_Customer' in team_df.columns:
-            cold_contacts = team_df['Cold'] if 'Cold' in team_df.columns else 0
-            
-            team_df['COLD TO CUSTOMER CONVERSION'] = np.where(
-                (cold_contacts + team_df['Cold_Customer']) > 0,
-                (team_df['Cold_Customer'] / (cold_contacts + team_df['Cold_Customer']) * 100).round(2),
-                0
-            )
-
-        # Calculate Total Row
-        total_row = pd.Series(index=team_df.columns, dtype='object')
-        total_row['Course Owner'] = 'TOTAL'
-        
-        # Sum numeric columns
-        numeric_cols = ['Grand Total', 'Customer', 'Customer_Revenue', 'Deal Leads', 
-                        'Hot', 'Warm', 'Cold', 
-                        'Hot_Customer', 'Warm_Customer', 'Cold_Customer']
-        
-        for col in numeric_cols:
-            if col in team_df.columns:
-                # Force numeric conversion to prevent string concatenation (broken totals like 000000)
-                total_row[col] = pd.to_numeric(team_df[col], errors='coerce').sum()
-        
-        # Recalculate percentages for Total row
-        grand_total = total_row.get('Grand Total', 0)
-        deal_leads = total_row.get('Deal Leads', 0)
-        customers = total_row.get('Customer', 0)
-        
-        total_row['Deal %'] = (deal_leads / grand_total * 100).round(2) if grand_total > 0 else 0
-        total_row['Customer %'] = (customers / deal_leads * 100).round(2) if deal_leads > 0 else 0
-        total_row['Lead->Deal %'] = (deal_leads / grand_total * 100).round(2) if grand_total > 0 else 0
-        total_row['Lead->Customer %'] = (customers / grand_total * 100).round(2) if grand_total > 0 else 0
-        
-        # [OK] NEW: Recalculate Conversion Metrics for Total Row
-        if 'Hot_Customer' in team_df.columns:
-            h_cust = total_row.get('Hot_Customer', 0)
-            h_lead = total_row.get('Hot', 0)
-            total_row['HOT-CUSTOMER CONVERSION'] = (h_cust / (h_lead + h_cust) * 100).round(2) if (h_lead + h_cust) > 0 else 0
-
-        if 'Warm_Customer' in team_df.columns:
-            w_cust = total_row.get('Warm_Customer', 0)
-            w_lead = total_row.get('Warm', 0)
-            total_row['WARM-CUSTOMER CONVERSION'] = (w_cust / (w_lead + w_cust) * 100).round(2) if (w_lead + w_cust) > 0 else 0
-
-        if 'Cold_Customer' in team_df.columns:
-            c_cust = total_row.get('Cold_Customer', 0)
-            c_lead = total_row.get('Cold', 0)
-            total_row['COLD TO CUSTOMER CONVERSION'] = (c_cust / (c_lead + c_cust) * 100).round(2) if (c_lead + c_cust) > 0 else 0
-        
-        # Append Total Row
-        team_df_with_total = pd.concat([team_df, pd.DataFrame([total_row])], ignore_index=True)
-        
-        # [OK] NEW: Filter columns to show only relevant metrics as requested
-        # "THESE TABLE ONLY NEED THAT OTHER METRICS NOT NEED"
-        cols_to_show = [
-            'Course Owner', 
-            'Hot', 'Warm', 'Cold',
-            'Hot_Customer', 'Warm_Customer', 'Cold_Customer',
-            'HOT-CUSTOMER CONVERSION', 'WARM-CUSTOMER CONVERSION', 'COLD TO CUSTOMER CONVERSION',
-            'Customer (Created)', # [OK] NEW: Added as requested
-            'Customer', 'Customer_Revenue' # Keep these as they are fundamental
-        ]
-        
-        # Only keep columns that actually exist
-        final_cols = [c for c in cols_to_show if c in team_df_with_total.columns]
-        
-        team_results[team_name] = team_df_with_total[final_cols]
-        
-    return team_results
-
-def get_detailed_team_data_temp_logic(metric_4):
-    """Return detailed DataFrames for each team with extra temp metrics."""
-    if metric_4.empty:
-        return {}
-    
-    team_results = {}
-    
-    for team_name, members in TEAM_MAPPING.items():
-        team_members_lower = [m.lower() for m in members]
-        
-        if 'Course Owner' not in metric_4.columns:
-            continue
-            
-        team_df = metric_4[metric_4['Course Owner'].str.lower().isin(team_members_lower)].copy()
-        
-        if team_df.empty:
-            team_results[team_name] = pd.DataFrame()
-            continue
-            
-        # Initialize percentage columns
-        for col in ['Deal %', 'Customer %', 'Lead->Deal %', 'Lead->Customer %']:
-            if col not in team_df.columns:
-                team_df[col] = 0.0
-
-        for idx in team_df.index:
-            gt = team_df.loc[idx, 'Grand Total'] if 'Grand Total' in team_df.columns else 0
-            dl = team_df.loc[idx, 'Deal Leads'] if 'Deal Leads' in team_df.columns else 0
-            cu = team_df.loc[idx, 'Customer'] if 'Customer' in team_df.columns else 0
-
-            team_df.loc[idx, 'Deal %'] = (dl / gt * 100).round(2) if gt > 0 else 0
-            team_df.loc[idx, 'Customer %'] = (cu / dl * 100).round(2) if dl > 0 else 0
-            team_df.loc[idx, 'Lead->Deal %'] = (dl / gt * 100).round(2) if gt > 0 else 0
-            team_df.loc[idx, 'Lead->Customer %'] = (cu / gt * 100).round(2) if gt > 0 else 0
-
-        # Calculate Total Row
-        total_row = pd.Series(index=team_df.columns, dtype='object')
-        total_row['Course Owner'] = 'TOTAL'
-        
-        numeric_cols = ['Grand Total', 'Customer', 'Customer_Revenue', 'Deal Leads', 'Hot', 'Warm', 'Cold']
-        for col in numeric_cols:
-            if col in team_df.columns:
-                total_row[col] = pd.to_numeric(team_df[col], errors='coerce').sum()
-        
-        # Recalculate percentages for Total row
-        grand_total = total_row.get('Grand Total', 0)
-        deal_leads = total_row.get('Deal Leads', 0)
-        customers = total_row.get('Customer', 0)
-        
-        total_row['Deal %'] = (deal_leads / grand_total * 100).round(2) if grand_total > 0 else 0
-        total_row['Customer %'] = (customers / deal_leads * 100).round(2) if deal_leads > 0 else 0
-        total_row['Lead->Deal %'] = (deal_leads / grand_total * 100).round(2) if grand_total > 0 else 0
-        total_row['Lead->Customer %'] = (customers / grand_total * 100).round(2) if grand_total > 0 else 0
-        
-        # Append Total Row
-        team_df_with_total = pd.concat([team_df, pd.DataFrame([total_row])], ignore_index=True)
-        
-        cols_to_show = [
-            'Course Owner', 
-            'Hot', 'Warm', 'Cold',
-            'Customer', 'Customer_Revenue',
-            'Deal Leads', 'Deal %', 'Customer %',
-            'Lead->Customer %', 'Lead->Deal %', 'Grand Total'
-        ]
-        
-        final_cols = [c for c in cols_to_show if c in team_df_with_total.columns]
-        team_results[team_name] = team_df_with_total[final_cols]
-        
-    return team_results
-
-def get_this_month_lead_performance(metric_4):
-    """Return detailed DataFrames substituting Customer with Qualified Lead."""
-    if metric_4.empty:
-        return {}
-    
-    team_results = {}
-    
-    for team_name, members in TEAM_MAPPING.items():
-        team_members_lower = [m.lower() for m in members]
-        if 'Course Owner' not in metric_4.columns: continue
-        team_df = metric_4[metric_4['Course Owner'].str.lower().isin(team_members_lower)].copy()
-        
-        if team_df.empty:
-            team_results[team_name] = pd.DataFrame()
-            continue
-            
-        # Ensure Qualified Lead column exists
-        if 'Qualified Lead' not in team_df.columns:
-            team_df['Qualified Lead'] = 0.0
-
-        # Initialize percentage columns
-        for col in ['Deal %', 'Qualified Lead %', 'Lead->Deal %', 'Lead->Qualified Lead %']:
-            if col not in team_df.columns:
-                team_df[col] = 0.0
-
-        for idx in team_df.index:
-            gt = team_df.loc[idx, 'Grand Total'] if 'Grand Total' in team_df.columns else 0
-            dl = team_df.loc[idx, 'Deal Leads'] if 'Deal Leads' in team_df.columns else 0
-            ql = team_df.loc[idx, 'Qualified Lead'] if 'Qualified Lead' in team_df.columns else 0
-
-            team_df.loc[idx, 'Deal %'] = (dl / gt * 100).round(2) if gt > 0 else 0
-            team_df.loc[idx, 'Qualified Lead %'] = (ql / dl * 100).round(2) if dl > 0 else 0
-            team_df.loc[idx, 'Lead->Deal %'] = (dl / gt * 100).round(2) if gt > 0 else 0
-            team_df.loc[idx, 'Lead->Qualified Lead %'] = (ql / gt * 100).round(2) if gt > 0 else 0
-
-        # Calculate Total Row
-        total_row = pd.Series(index=team_df.columns, dtype='object')
-        total_row['Course Owner'] = 'TOTAL'
-        
-        numeric_cols = ['Grand Total', 'Qualified Lead', 'Deal Leads', 'Hot', 'Warm', 'Cold']
-        for col in numeric_cols:
-            if col in team_df.columns:
-                total_row[col] = pd.to_numeric(team_df[col], errors='coerce').sum()
-        
-        # Recalculate percentages for Total row
-        grand_total = total_row.get('Grand Total', 0)
-        deal_leads = total_row.get('Deal Leads', 0)
-        qualified_leads = total_row.get('Qualified Lead', 0)
-        
-        total_row['Deal %'] = (deal_leads / grand_total * 100).round(2) if grand_total > 0 else 0
-        total_row['Qualified Lead %'] = (qualified_leads / deal_leads * 100).round(2) if deal_leads > 0 else 0
-        total_row['Lead->Deal %'] = (deal_leads / grand_total * 100).round(2) if grand_total > 0 else 0
-        total_row['Lead->Qualified Lead %'] = (qualified_leads / grand_total * 100).round(2) if grand_total > 0 else 0
-        
-        # Append Total Row
-        team_df_with_total = pd.concat([team_df, pd.DataFrame([total_row])], ignore_index=True)
-        
-        cols_to_show = [
-            'Course Owner', 
-            'Hot', 'Warm', 'Cold',
-            'Qualified Lead',
-            'Deal Leads', 'Deal %', 'Qualified Lead %',
-            'Lead->Qualified Lead %', 'Lead->Deal %', 'Grand Total'
-        ]
-        
-        final_cols = [c for c in cols_to_show if c in team_df_with_total.columns]
-        team_results[team_name] = team_df_with_total[final_cols]
-        
-    return team_results
-
-# [OK] NEW: Attractive Owner Visualization Functions
-def create_owner_performance_heatmap(metric_4):
-    """Create heatmap visualization for owner performance."""
-    if metric_4.empty:
-        return None
-    
-    # Select top owners by total leads
-    top_owners = metric_4.nlargest(15, 'Grand Total') if 'Grand Total' in metric_4.columns else metric_4.head(15)
-    
-    # Prepare data for heatmap - use key metrics
-    heatmap_data = top_owners[['Course Owner', 'Lead->Customer %', 'Lead->Deal %', 'Customer %']].copy()
-    heatmap_data = heatmap_data.set_index('Course Owner')
-    
-    # Truncate owner names for better display
-    heatmap_data.index = [name[:20] + '...' if len(name) > 20 else name for name in heatmap_data.index]
-    
-    return heatmap_data
-
-def create_owner_radar_chart(metric_4, selected_owners=None):
-    """Create radar chart comparing multiple owners."""
-    if metric_4.empty or len(metric_4) < 2:
-        return None, None
-    
-    # Select owners to compare
-    if selected_owners and len(selected_owners) > 0:
-        compare_owners = metric_4[metric_4['Course Owner'].isin(selected_owners)].copy()
-    else:
-        # Default: top 3 owners by Grand Total
-        compare_owners = metric_4.nlargest(4, 'Grand Total').copy() if 'Grand Total' in metric_4.columns else metric_4.head(4).copy()
-    
-    if len(compare_owners) < 2:
-        return None, None
-    
-    # Prepare data for radar chart
-    radar_metrics = ['Lead->Customer %', 'Lead->Deal %', 'Customer %']
-    
-    # Check if we have funnel metrics
-    funnel_metrics = []
-    for metric in ['Cold', 'Warm', 'Hot']:
-        if metric in compare_owners.columns:
-            funnel_metrics.append(metric)
-    
-    # Use funnel metrics if available
-    if len(funnel_metrics) >= 2:
-        radar_metrics = funnel_metrics[:3]  # Use up to 3 funnel metrics
-    
-    # Prepare data
-    categories = radar_metrics
-    fig = go.Figure()
-    
-    colors = px.colors.qualitative.Set3
-    
-    for idx, (_, owner_row) in enumerate(compare_owners.iterrows()):
-        owner_name = owner_row['Course Owner'][:15] + '...' if len(owner_row['Course Owner']) > 15 else owner_row['Course Owner']
-        
-        values = []
-        for category in categories:
-            if category in ['Lead->Customer %', 'Lead->Deal %', 'Customer %']:
-                values.append(owner_row.get(category, 0))
-            else:
-                # For funnel metrics, calculate percentage of Grand Total
-                if 'Grand Total' in owner_row and owner_row['Grand Total'] > 0:
-                    values.append((owner_row.get(category, 0) / owner_row['Grand Total']) * 100)
-                else:
-                    values.append(0)
-        
-        # Add to radar chart
-        fig.add_trace(go.Scatterpolar(
-            r=values,
-            theta=categories,
-            fill='toself',
-            name=owner_name,
-            line_color=colors[idx % len(colors)],
-            opacity=0.7
-        ))
-    
-    fig.update_layout(
-        polar=dict(
-            radialaxis=dict(
-                visible=True,
-                range=[0, 100],
-                tickfont=dict(size=10)
-            ),
-        ),
-        showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=1.1
-        ),
-        height=500,
-        margin=dict(l=80, r=80, t=40, b=40)
-    )
-    
-    return fig, compare_owners['Course Owner'].tolist()
-
-def create_owner_scorecards(metric_4, top_n=6):
-    """Create visual scorecards for top owners."""
-    if metric_4.empty:
+# ---------------- HELPERS ----------------
+def calculate_cumulative(daily_data, key="New Users"):
+    """Build cumulative sum list for worm graph."""
+    if not daily_data:
         return []
+    df_c = pd.DataFrame(daily_data)
+    if df_c.empty or key not in df_c.columns:
+        return []
+    df_c['Cumulative'] = df_c[key].cumsum()
+    return df_c[['Date', 'Cumulative']].to_dict('records')
+
+
+def get_comparison_dates(offset=0, period='monthly', c_start1=None, c_end1=None, c_start2=None, c_end2=None):
+    """Return (m1_start, m1_end, m2_start, m2_end, base_date) using IST explicitly.
+    period can be 'daily', 'weekly', 'monthly', 'quarterly', 'custom', 'all'."""
+    ist = pytz.timezone('Asia/Kolkata')
+    now_ist = datetime.now(ist)
+    today = now_ist.date()
     
-    # Get top owners by conversion rate
-    top_owners = metric_4.nlargest(top_n, 'Lead->Customer %').copy() if 'Lead->Customer %' in metric_4.columns else metric_4.head(top_n).copy()
-    
-    scorecards = []
-    color_classes = ['owner-scorecard-green', 'owner-scorecard-blue', 'owner-scorecard-orange', 
-                     'owner-scorecard-purple', 'owner-scorecard', 'owner-scorecard-green']
-    
-    for idx, (_, owner_row) in enumerate(top_owners.iterrows()):
-        owner_name = owner_row['Course Owner']
-        conversion_rate = owner_row.get('Lead->Customer %', 0)
-        deal_rate = owner_row.get('Lead->Deal %', 0)
-        total_leads = owner_row.get('Grand Total', 0)
-        customers = owner_row.get('Customer', 0)
+    if period == 'daily':
+        target_date = today - timedelta(days=offset)
+        m1_start = target_date
+        m1_end = target_date
+        m2_start = target_date - timedelta(days=1)
+        m2_end = m2_start
+        return m1_start, m1_end, m2_start, m2_end, now_ist
         
-        color_class = color_classes[idx % len(color_classes)]
+    elif period == 'weekly':
+        # Monday = 0, Sunday = 6
+        day_of_week = today.weekday()
+        this_monday = today - timedelta(days=day_of_week)
+        # Shift weeks backwards by offset
+        target_monday = this_monday - timedelta(weeks=offset)
         
-        # Determine performance badge
-        if conversion_rate >= 10:
-            performance_badge = " TOP PERFORMER"
-        elif conversion_rate >= 5:
-            performance_badge = " GOOD"
-        elif conversion_rate > 0:
-            performance_badge = " AVERAGE"
+        m1_start = target_monday
+        # if this is the current week, end today, else end on Sunday
+        if offset == 0:
+            m1_end = today
+            days_passed = day_of_week
         else:
-            performance_badge = " NEEDS IMPROVEMENT"
+            m1_end = target_monday + timedelta(days=6)
+            days_passed = 6
+            
+        m2_start = target_monday - timedelta(weeks=1)
+        m2_end = m2_start + timedelta(days=days_passed)
+        return m1_start, m1_end, m2_start, m2_end, now_ist
         
-        scorecard_html = f"""
-        <div class="owner-scorecard {color_class}">
-            <h4 style="margin: 0 0 10px 0; font-size: 1.2rem;">{owner_name[:25]}{'...' if len(owner_name) > 25 else ''}</h4>
-            <div style="display: flex; justify-content: space-between; margin: 10px 0;">
-                <div style="text-align: center;">
-                    <div style="font-size: 2rem; font-weight: bold;">{conversion_rate}%</div>
-                    <div style="font-size: 0.8rem;">Lead->Customer</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 2rem; font-weight: bold;">{deal_rate}%</div>
-                    <div style="font-size: 0.8rem;">Lead->Deal</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 2rem; font-weight: bold;">{customers}</div>
-                    <div style="font-size: 0.8rem;">Customers</div>
-                </div>
-            </div>
-            <div style="margin-top: 10px; font-size: 0.9rem; background: rgba(255,255,255,0.2); padding: 5px; border-radius: 5px;">
-                {performance_badge} | {total_leads:,} total leads
-            </div>
-        </div>
-        """
+    elif period == 'quarterly':
+        target_date = now_ist.date()
+        # Find current quarter start month (1, 4, 7, 10)
+        curr_q_start_month = 3 * ((target_date.month - 1) // 3) + 1
+        curr_q_start_date = target_date.replace(month=curr_q_start_month, day=1)
         
-        scorecards.append(scorecard_html)
-    
-    return scorecards
-
-def create_owner_funnel_chart(metric_4, selected_owners=None):
-    """Create funnel visualization for selected owners."""
-    if metric_4.empty:
-        return None
-    
-    if selected_owners and len(selected_owners) > 0:
-        compare_data = metric_4[metric_4['Course Owner'].isin(selected_owners)].copy()
-    else:
-        compare_data = metric_4.nlargest(3, 'Grand Total').copy() if 'Grand Total' in metric_4.columns else metric_4.head(3).copy()
-    
-    if compare_data.empty:
-        return None
-    
-    # Prepare funnel data
-    funnel_stages = ['Cold', 'Warm', 'Hot', 'Customer']
-    available_stages = [stage for stage in funnel_stages if stage in compare_data.columns]
-    
-    if not available_stages:
-        return None
-    
-    # Create funnel chart
-    fig = go.Figure()
-    
-    for _, owner_row in compare_data.iterrows():
-        owner_name = owner_row['Course Owner'][:15] + '...' if len(owner_row['Course Owner']) > 15 else owner_row['Course Owner']
+        # Apply offset by going back 3 months
+        for _ in range(offset):
+            # Go to the last day of the previous quarter
+            curr_q_start_date = (curr_q_start_date - timedelta(days=1)).replace(day=1)
+            # Find the new quarter start
+            curr_q_start_month = 3 * ((curr_q_start_date.month - 1) // 3) + 1
+            curr_q_start_date = curr_q_start_date.replace(month=curr_q_start_month, day=1)
+            
+        m1_start = curr_q_start_date
         
-        values = []
-        for stage in available_stages:
-            values.append(owner_row.get(stage, 0))
-        
-        fig.add_trace(go.Funnel(
-            name=owner_name,
-            y=available_stages,
-            x=values,
-            textinfo="value+percent initial",
-            opacity=0.8
-        ))
-    
-    fig.update_layout(
-        title="Owner Funnel Comparison",
-        funnelmode="stack",
-        height=500,
-        showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=1.05
-        )
-    )
-    
-    return fig
-
-def create_owner_performance_grid(metric_4):
-    """Create a grid view of owner performance."""
-    if metric_4.empty:
-        return None
-    
-    # Sort by Lead->Customer %
-    performance_grid = metric_4.copy()
-    if 'Lead->Customer %' in performance_grid.columns:
-        performance_grid = performance_grid.sort_values('Lead->Customer %', ascending=False)
-    
-    # Select top 12 owners
-    performance_grid = performance_grid.head(12)
-    
-    # Create grid HTML
-    grid_html = """
-    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; margin: 20px 0;">
-    """
-    
-    for idx, (_, owner_row) in enumerate(performance_grid.iterrows()):
-        owner_name = owner_row['Course Owner']
-        conversion_rate = owner_row.get('Lead->Customer %', 0)
-        total_leads = owner_row.get('Grand Total', 0)
-        customers = owner_row.get('Customer', 0)
-        
-        # Determine color based on conversion rate
-        if conversion_rate >= 10:
-            bg_color = "linear-gradient(135deg, #d4edda, #c3e6cb)"
-            border_color = "#28a745"
-        elif conversion_rate >= 5:
-            bg_color = "linear-gradient(135deg, #fff3cd, #ffeaa7)"
-            border_color = "#ffc107"
+        # End of the targeted quarter
+        end_month = m1_start.month + 2
+        if end_month > 12:
+            q_end_date = m1_start.replace(year=m1_start.year + 1, month=end_month - 12, day=1)
+            q_end_date = (q_end_date.replace(month=q_end_date.month % 12 + 1) - timedelta(days=1))
         else:
-            bg_color = "linear-gradient(135deg, #f8d7da, #f5c6cb)"
-            border_color = "#dc3545"
-        
-        # Rank indicator
-        rank = idx + 1
-        rank_emoji = "" if rank == 1 else "" if rank == 2 else "" if rank == 3 else f"#{rank}"
-        
-        grid_html += f"""
-        <div style="background: {bg_color}; border: 2px solid {border_color}; border-radius: 10px; padding: 15px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                <div style="font-size: 1.5rem; font-weight: bold;">{rank_emoji}</div>
-                <div style="font-size: 1.8rem; font-weight: bold; color: #2c3e50;">{conversion_rate}%</div>
-            </div>
-            <div style="font-weight: bold; font-size: 1.1rem; margin-bottom: 5px;">{owner_name[:20]}{'...' if len(owner_name) > 20 else ''}</div>
-            <div style="display: flex; justify-content: space-between; font-size: 0.9rem; color: #666;">
-                <div> {total_leads:,} leads</div>
-                <div> {customers} customers</div>
-            </div>
-            <div style="margin-top: 10px; height: 8px; background: #e9ecef; border-radius: 4px; overflow: hidden;">
-                <div style="width: {min(conversion_rate, 100)}%; height: 100%; background: {border_color};"></div>
-            </div>
-        </div>
-        """
-    
-    grid_html += "</div>"
-    return grid_html
+            q_end_date = m1_start.replace(month=end_month)
+            if q_end_date.month == 12:
+                q_end_date = q_end_date.replace(year=q_end_date.year + 1, month=1, day=1) - timedelta(days=1)
+            else:
+                q_end_date = q_end_date.replace(month=q_end_date.month + 1, day=1) - timedelta(days=1)
 
-# [OK] CRITICAL FIX: Fetch Deal Pipeline Stages to get correct Stage IDs
-@st.cache_data(ttl=86400)
-def fetch_deal_pipeline_stages(api_key):
-    """Fetch deal pipeline stages to get correct stage IDs (not labels)."""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    url = f"{HUBSPOT_API_BASE}/crm/v3/pipelines/deals"
-    
+        # If it's the current ongoing quarter, end at today
+        if m1_start.year == today.year and curr_q_start_month <= today.month <= curr_q_start_month + 2 and offset == 0:
+            m1_end = today
+        else:
+            m1_end = q_end_date
+            
+        days_passed = (m1_end - m1_start).days
+        
+        # Month 2 (Previous quarter comparison)
+        prev_q_last_day = m1_start - timedelta(days=1)
+        prev_q_start_month = 3 * ((prev_q_last_day.month - 1) // 3) + 1
+        m2_start = prev_q_last_day.replace(month=prev_q_start_month, day=1)
+        
+        m2_end = m2_start + timedelta(days=days_passed)
+        if m2_end > prev_q_last_day:
+            m2_end = prev_q_last_day
+
+        return m1_start, m1_end, m2_start, m2_end, now_ist
+        
+    elif period == 'custom':
+        # Default to today if parsing fails
+        try:
+            m1_start = datetime.strptime(c_start1, '%Y-%m-%d').date() if c_start1 else today
+            m1_end = datetime.strptime(c_end1, '%Y-%m-%d').date() if c_end1 else today
+            m2_start = datetime.strptime(c_start2, '%Y-%m-%d').date() if c_start2 else m1_start - timedelta(days=1)
+            m2_end = datetime.strptime(c_end2, '%Y-%m-%d').date() if c_end2 else m2_start
+        except Exception:
+            m1_start = m1_end = m2_start = m2_end = today
+            
+        return m1_start, m1_end, m2_start, m2_end, now_ist
+            
+    elif period == 'all':
+        m1_start = datetime(2020, 1, 1).date()
+        m1_end = today
+        m2_start = m1_start - timedelta(days=1) # dummy
+        m2_end = m2_start # dummy
+        return m1_start, m1_end, m2_start, m2_end, now_ist
+        
+    else: # monthly
+        target_date = now_ist
+        if offset > 0:
+            for _ in range(offset):
+                target_date = target_date.replace(day=1) - timedelta(days=1)
+        
+        # Month 1 (Current or selected)
+        m1_start = target_date.date().replace(day=1)
+        if target_date.year == now_ist.year and target_date.month == now_ist.month:
+            m1_end = now_ist.date()
+        else:
+            # Last day of that month
+            if target_date.month == 12:
+                next_m = target_date.replace(year=target_date.year + 1, month=1, day=1)
+            else:
+                next_m = target_date.replace(month=target_date.month + 1, day=1)
+            m1_end = (next_m - timedelta(days=1)).date()
+            
+        days_passed = (m1_end - m1_start).days
+        
+        # Month 2 (Previous month comparison)
+        prev_m_last_day = m1_start - timedelta(days=1)
+        m2_start = prev_m_last_day.replace(day=1)
+        
+        m2_end = m2_start + timedelta(days=days_passed)
+        if m2_end > prev_m_last_day:
+            m2_end = prev_m_last_day
+            
+        return m1_start, m1_end, m2_start, m2_end, now_ist
+
+
+def _chart_end_date(end_date_obj, ist):
+    """Return end date for chart. Cumulative charts never drop, so always include today."""
+    return end_date_obj
+
+
+# ---------------- GA4 ----------------
+@cache.cached(timeout=30, key_prefix='active_users')
+def get_active_users():
+    if not client:
+        return 0
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            pipelines = data.get("results", [])
-            
-            if not pipelines:
-                st.error(" No deal pipelines found in HubSpot")
-                return {}
-            
-            all_stages = {}
-            
-            for pipeline in pipelines:
-                pipeline_id = pipeline.get("id", "")
-                pipeline_label = pipeline.get("label", "")
-                stages = pipeline.get("stages", [])
-                
-                for stage in stages:
-                    stage_id = stage.get("id", "")
-                    stage_label = stage.get("label", "")
-                    stage_metadata = stage.get("metadata", {})
-                    probability = stage_metadata.get("probability", "0")
-                    
-                    all_stages[stage_id] = {
-                        "stage_id": stage_id,
-                        "stage_label": stage_label,
-                        "pipeline_id": pipeline_id,
-                        "pipeline_label": pipeline_label,
-                        "probability": probability,
-                        "full_info": f"{stage_label} (ID: {stage_id}, Probability: {probability})"
-                    }
-            
-            st.success(f"[OK] Loaded {len(all_stages)} deal stages from {len(pipelines)} pipelines")
-            return all_stages
-            
-        elif response.status_code == 403:
-            st.error("""
-             Missing required scope: crm.pipelines.read
-            Please update your API key permissions to include:
-            - crm.objects.deals.read
-            - crm.objects.contacts.read  
-            - crm.pipelines.read
-            """)
-            return {}
-        else:
-            st.error(f" Failed to fetch deal pipelines: {response.status_code}")
-            return {}
-            
-    except requests.exceptions.RequestException as e:
-        st.error(f" Error fetching deal pipelines: {e}")
-        return {}
+        req = RunRealtimeReportRequest(
+            property=f"properties/{PROPERTY_ID}",
+            metrics=[Metric(name="activeUsers")]
+        )
+        resp = client.run_realtime_report(req, timeout=5)
+        return int(resp.rows[0].metric_values[0].value) if resp and resp.rows else 0
+    except Exception:
+        return 0
 
-# [OK] Auto-detect Admission Confirmed stage ID
-def detect_admission_confirmed_stage(all_stages):
-    """Auto-detect Admission Confirmed stage from pipeline stages."""
-    target_labels = [
-        "admission confirmed",
-        "admission_confirmed", 
-        "confirmed",
-        "closed won",
-        "closedwon",
-        "won",
-        "customer"
-    ]
-    
-    detected_stages = []
-    
-    for stage_id, stage_info in all_stages.items():
-        stage_label = stage_info.get("stage_label", "").lower()
-        probability = stage_info.get("probability", "0")
-        
-        # [OK] Skip upselling stages - they should NOT count as customer stages
-        if 'upselling' in stage_label:
-            continue
-        
-        # [OK] NEW: Explicit check for known IDs
-        if stage_id in ['closedwon', '1884422889']:
-             detected_stages.append({
-                "stage_id": stage_id,
-                "stage_label": stage_info.get("stage_label"),
-                "probability": probability,
-                "pipeline": stage_info.get("pipeline_label"),
-                "match_reason": f"Explicit ID Match: {stage_id}"
-            })
-             continue
 
-        for target in target_labels:
-            if target in stage_label:
-                try:
-                    prob_float = float(probability)
-                    if prob_float >= 0.9:
-                        detected_stages.append({
-                            "stage_id": stage_id,
-                            "stage_label": stage_info.get("stage_label"),
-                            "probability": probability,
-                            "pipeline": stage_info.get("pipeline_label"),
-                            "match_reason": f"Label contains '{target}', probability: {probability}"
-                        })
-                        break
-                except:
-                    detected_stages.append({
-                        "stage_id": stage_id,
-                        "stage_label": stage_info.get("stage_label"),
-                        "probability": probability,
-                        "pipeline": stage_info.get("pipeline_label"),
-                        "match_reason": f"Label contains '{target}'"
-                    })
-                    break
-    
-    return detected_stages
+@cache.memoize(timeout=600)
+def get_discover_metrics(start_date, end_date):
+    if not client:
+        return 0
+    try:
+        req = RunReportRequest(
+            property=f"properties/{PROPERTY_ID}",
+            date_ranges=[DateRange(start_date=str(start_date), end_date=str(end_date))],
+            metrics=[Metric(name="newUsers")]
+        )
+        resp = client.run_report(req)
+        return int(resp.rows[0].metric_values[0].value) if resp.rows else 0
+    except Exception:
+        return 0
 
-# [OK] CRITICAL FIX: UPDATED normalize_lead_status function
+
+@cache.memoize(timeout=600)
+def get_daily_new_users(start_date, end_date):
+    if not client:
+        return []
+    try:
+        req = RunReportRequest(
+            property=f"properties/{PROPERTY_ID}",
+            date_ranges=[DateRange(start_date=str(start_date), end_date=str(end_date))],
+            dimensions=[Dimension(name="date")],
+            metrics=[Metric(name="newUsers")],
+            order_bys=[OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name="date"), desc=False)]
+        )
+        resp = client.run_report(req)
+        data = []
+        for row in resp.rows:
+            d = datetime.strptime(row.dimension_values[0].value, "%Y%m%d").strftime('%Y-%m-%d')
+            data.append({"Date": d, "New Users": int(row.metric_values[0].value)})
+        return data
+    except Exception:
+        return []
+
+
+@cache.memoize(timeout=600)
+def get_traffic_sources(start_date, end_date):
+    if not client:
+        return pd.DataFrame()
+    try:
+        req = RunReportRequest(
+            property=f"properties/{PROPERTY_ID}",
+            date_ranges=[DateRange(start_date=str(start_date), end_date=str(end_date))],
+            dimensions=[Dimension(name="sessionSourceMedium")],
+            metrics=[Metric(name="newUsers")],
+            order_bys=[OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name="newUsers"), desc=True)],
+            limit=8
+        )
+        resp = client.run_report(req)
+        data = [{"Channel": r.dimension_values[0].value, "New Users": int(r.metric_values[0].value)} for r in resp.rows]
+        return pd.DataFrame(data)
+    except Exception:
+        return pd.DataFrame()
+
+
+# ---------------- HUBSPOT ----------------
+@cache.memoize(timeout=600)
+def get_hubspot_token():
+    try:
+        # Check both secrets and os.environ for token
+        token = secrets.get("hubspot", {}).get("token") or os.environ.get("HUBSPOT_TOKEN")
+        return token.strip() if token else None
+    except Exception:
+        return None
+
+
+# ---------------- STATUS NORMALIZATION ----------------
 def normalize_lead_status(raw_status, close_date=None, start_date=None, end_date=None):
     """
-    Normalize lead status - ABSOLUTELY NO CUSTOMER HERE!
-    This function MUST NEVER return "Customer" for any lead status.
-    If close_date is provided and outside the start/end range, 
-    "Qualified Lead" will be downgraded to "Hot" or "Warm".
+    Standardized status normalization from nn.txt.
+    Returns "Qualified Lead" only if the contact converted within the date range.
     """
     if not raw_status:
         return "Unknown"
     
     status = str(raw_status).strip().lower()
     
-    # [OK] CRITICAL FIX: "Closed Lost" is VALID, but "Closed Won" is CUSTOMER
-    # Must check for "Closed Lost" BEFORE the blocklist check
+    # Check for Closed Lost
     if "closed lost" in status or "closed_lost" in status:
         return "Closed Lost"
     
-    # [OK] FIRST: Check if this contains any customer keywords - BLOCK THEM!
+    # Check for Customer Keywords
     for keyword in CUSTOMER_KEYWORDS_BLOCKLIST:
         if keyword in status:
-            # [OK] SPECIAL: If Close Date is provided, it MUST BE in the reporting range
-            # to be counted as a "Qualified Lead". Otherwise downgrade it.
-            # This ensures only leads closed IN RANGE are counted as Qualified.
             is_in_range = True
             if close_date and start_date and end_date:
                 try:
-                    # Parse close_date if it's a string
                     if isinstance(close_date, str):
-                        c_date = datetime.strptime(close_date[:10], "%Y-%m-%d").date()
+                        if close_date.isdigit():
+                            c_dt = datetime.fromtimestamp(int(close_date)/1000).date()
+                        else:
+                            c_dt = datetime.strptime(close_date[:10], "%Y-%m-%d").date()
                     else:
-                        c_date = close_date
+                        c_dt = close_date
                     
-                    if not (start_date <= c_date <= end_date):
+                    if not (start_date <= c_dt <= end_date):
                         is_in_range = False
                 except:
                     pass
@@ -1793,3437 +380,2017 @@ def normalize_lead_status(raw_status, close_date=None, start_date=None, end_date
             if is_in_range:
                 return "Qualified Lead"
             
-            # This is PROBABLY a customer deal stage that leaked into contacts
-            if "hot" in status:
-                return "Hot"
-            elif "warm" in status:
-                return "Warm"
-            else:
-                return "Hot" # Fallback to Hot if out of date range
-    
-    # Now handle normal lead statuses
+            # Downgrade if out of range to avoid double counting converted leads as active pipeline
+            if "hot" in status: return "Hot"
+            elif "warm" in status: return "Warm"
+            else: return "Hot"
+
+    # Map Pipeline Statuses
     if "prospect" in status:
-        if "hot" in status:
-            return "Hot"
-        elif "warm" in status:
-            return "Warm"
-        elif "neutral" in status or "cold" in status:
-            return "Cold"
-        else:
-            return "Warm"
-    
-    if "not_connect" in status or "nc" in status.lower() or "not connected" in status:
-        return "Not Connected (NC)"
-    
-    if "not_interest" in status:
-        return "Not Interested"
-    
-    if "not_qualif" in status or "unqualif" in status:
-        return "Not Qualified"
-    
-    if "duplicate" in status or "junk" in status:
-        return "Duplicate"
-    
-    if "new" in status or "open" in status:
-        return "New Lead"
+        if "hot" in status: return "Hot"
+        elif "warm" in status: return "Warm"
+        elif "cold" in status or "neutral" in status: return "Cold"
+        else: return "Warm"
     
     if "qualified" in status:
-        return "Not Qualified"
-    
-    if "upselling" in status:
-        return "Upselling"
-    
-    if "course shifting" in status or "course_shifting" in status:
-        return "Course Shifting"
-    
-    if status in LEAD_STATUS_MAP:
-        return LEAD_STATUS_MAP[status]
-    
-    # If we get here and it's still a customer-like term, map to Not Qualified (as per user request)
-    if any(keyword in status for keyword in ["deal", "converted"]):
-        return "Not Qualified"
-    
-    return status.replace("_", " ").title()
+        return "Not Qualified" # Per nn.txt logic
+        
+    return LEAD_STATUS_MAP.get(status, status.replace("_", " ").title())
 
-# [OK] CRITICAL FIX: Debug function to see what's being converted to "Customer"
-def debug_lead_status_conversion(df):
-    """Debug function to identify what's being incorrectly marked as Customer."""
-    if df.empty:
-        return
-    
-    # Find all rows where Lead Status is "Customer"
-    customer_rows = df[df['Lead Status'] == 'Customer']
-    
-    if not customer_rows.empty:
-        st.error(f" FOUND {len(customer_rows)} ROWS MARKED AS 'CUSTOMER' IN LEADS!")
-        st.write("This should be ZERO. Showing samples:")
-        
-        # Show raw values that got converted to Customer
-        st.write("**Raw Lead Status values that became 'Customer':**")
-        unique_raw_values = customer_rows['Lead Status Raw'].dropna().unique()
-        
-        for raw_val in unique_raw_values[:10]:  # Show first 10
-            st.write(f"- `{raw_val}` -> Customer")
-        
-        if len(unique_raw_values) > 10:
-            st.write(f"... and {len(unique_raw_values) - 10} more")
-        
-        # Show sample rows
-        st.write("**Sample rows with issue:**")
-        st.dataframe(customer_rows[['Full Name', 'Lead Status', 'Lead Status Raw', 'Course/Program']].head(10))
-        
-        # Let user manually fix these
-        st.markdown("""
-        <div class="data-fix-card">
-        <strong> QUICK FIX OPTION:</strong><br>
-        You can manually remap these incorrect "Customer" entries:
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Provide a quick fix option
-        if st.button(" Auto-fix 'Customer' in leads (map to 'Qualified Lead')"):
-            # Fix the dataframe
-            df_fixed = df.copy()
-            df_fixed['Lead Status'] = df_fixed['Lead Status'].replace('Customer', 'Qualified Lead')
-            
-            # Update session state
-            st.session_state.contacts_df = df_fixed
-            st.success("[OK] Fixed! 'Customer' entries in leads now mapped to 'Qualified Lead'")
-            st.rerun()
+EXCLUDED_OWNERS = ["Mahalekshmi M J", "Sreeja Anoop", "arya.krishnan", "Devi Krishna", "Aneesha S", "Sonia William"]
 
-def validate_api_key(api_key):
-    """Validate the HubSpot API key format."""
-    if not api_key:
-        return False, " API key is empty"
+@cache.memoize(timeout=3600)
+def fetch_hubspot_owners():
+    """Fetch HubSpot owner mapping IDs to names."""
+    token = get_hubspot_token()
+    if not token:
+        return {}
     
-    if not api_key.startswith("pat-"):
-        return False, " Invalid API key format. Should start with 'pat-'"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    url = "https://api.hubapi.com/crm/v3/owners"
+    mapping = {}
     
-    if len(api_key) < 20:
-        return False, " API key appears too short"
-    
-    return True, "[OK] API key format looks valid"
+    try:
+        while True:
+            response = requests.get(url, headers=headers, params={"limit": 100}, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                for owner in data.get("results", []):
+                    o_id = str(owner.get("id"))
+                    fn = owner.get("firstName", "")
+                    ln = owner.get("lastName", "")
+                    email = owner.get("email", "")
+                    name = f"{fn} {ln}".strip() if fn or ln else email.split("@")[0] if email else f"Owner {o_id}"
+                    mapping[o_id] = name
+                
+                paging = data.get("paging", {})
+                next_link = paging.get("next", {}).get("link")
+                if not next_link:
+                    break
+                url = next_link
+            else:
+                break
+    except Exception as e:
+        print(f"Error fetching owners: {e}")
+    return mapping
 
-def test_hubspot_connection(api_key):
-    """Test if the HubSpot API key is valid."""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    url = f"{HUBSPOT_API_BASE}/crm/v3/objects/contacts?limit=1"
+@cache.memoize(timeout=3600)  # Cache pipeline stages for 1 hour
+def fetch_deal_pipeline_stages():
+    """Fetch deal pipeline stages to get correct stage IDs."""
+    token = get_hubspot_token()
+    if not token:
+        return {}
+    
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    url = "https://api.hubapi.com/crm/v3/pipelines/deals"
     
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        
         if response.status_code == 200:
-            return True, "[OK] Connection successful! API key is valid."
-        elif response.status_code == 401:
-            error_data = response.json()
-            error_message = error_data.get('message', 'Unknown error')
-            
-            if "Invalid token" in error_message or "expired" in error_message:
-                return False, " API key is invalid or expired. Please check your API key."
-            elif "scope" in error_message.lower():
-                return False, f" Missing required scopes. Error: {error_message}"
-            else:
-                return False, f" Authentication failed. Status: {response.status_code}"
-        else:
-            return False, f" Connection failed. Status: {response.status_code}"
-    except requests.exceptions.RequestException as e:
-        return False, f" Connection error: {str(e)}"
-
-@st.cache_data(ttl=3600)
-def fetch_owner_mapping(api_key):
-    """Fetch ALL owner ID to name mapping with pagination."""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    url = f"{HUBSPOT_API_BASE}/crm/v3/owners"
-    params = {"limit": 100}
-    mapping = {}
-    page_count = 0
-    total_owners = 0
-
-    try:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        while True:
-            response = requests.get(url, headers=headers, params=params, timeout=30)
-            response.raise_for_status()
-
             data = response.json()
-            owners = data.get("results", [])
-            
-            for owner in owners:
-                owner_id = str(owner.get("id", ""))
-
-                first_name = owner.get("firstName", "")
-                last_name = owner.get("lastName", "")
-                email = owner.get("email", "")
-
-                name = f"{first_name} {last_name}".strip() if first_name or last_name else email.split("@")[0] if email else f"Owner {owner_id}"
-                mapping[owner_id] = name
-
-            page_count += 1
-            total_owners += len(owners)
-            
-            if page_count <= 5:
-                progress_bar.progress(min(page_count / 5, 0.9))
-            status_text.text(f" Fetched {total_owners} owners (page {page_count})...")
-
-            paging = data.get("paging", {})
-            next_link = paging.get("next", {}).get("link")
-
-            if not next_link:
-                progress_bar.progress(1.0)
-                status_text.text(f"[OK] Owner mapping complete! Total: {total_owners} owners")
-                break
-
-            url = next_link
-            params = None
-            time.sleep(0.1)
-            
-    except requests.exceptions.RequestException as e:
-        st.warning(f" Partial owner mapping loaded. Error: {str(e)[:100]}")
+            pipelines = data.get("results", [])
+            all_stages = {}
+            for pipeline in pipelines:
+                p_id = pipeline.get("id")
+                p_label = pipeline.get("label")
+                for stage in pipeline.get("stages", []):
+                    s_id = stage.get("id")
+                    s_label = stage.get("label")
+                    prob = stage.get("metadata", {}).get("probability", "0")
+                    all_stages[s_id] = {
+                        "id": s_id,
+                        "label": s_label,
+                        "pipeline_id": p_id,
+                        "pipeline_label": p_label,
+                        "probability": prob
+                    }
+            return all_stages
     except Exception as e:
-        st.warning(f" Could not fetch owner mapping: {str(e)[:100]}")
+        print(f"Error fetching pipelines: {e}")
+    return {}
 
-    return mapping
+# HubSpot Session with retries
+hs_session = requests.Session()
+retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+hs_session.mount('https://', HTTPAdapter(max_retries=retries))
 
-def date_to_hubspot_timestamp(date_obj, is_end_date=False):
-    """Convert date to HubSpot timestamp (milliseconds)."""
-    if isinstance(date_obj, str):
-        date_obj = datetime.strptime(date_obj, "%Y-%m-%d").date()
-    
-    if is_end_date:
-        dt = datetime.combine(date_obj, datetime.max.time())
-    else:
-        dt = datetime.combine(date_obj, datetime.min.time())
-    
-    dt_ist = IST.localize(dt)
-    dt_utc = dt_ist.astimezone(pytz.UTC)
-    return int(dt_utc.timestamp() * 1000)
-
-@st.cache_data(ttl=900, show_spinner=False)
-def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end_date):
-    """Fetch ALL contacts from HubSpot with server-side date filtering (Cached 15 mins)."""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    start_timestamp = date_to_hubspot_timestamp(start_date, is_end_date=False)
-    safe_end_date = end_date + timedelta(days=1)
-    end_timestamp = date_to_hubspot_timestamp(safe_end_date, is_end_date=False)
-    
-    all_contacts = []
-    after = None
-    
-    # Build filter
-    # Build filter based on selected field
-    if date_field == "Created Date":
-        filter_groups = [
-            {
-                "filters": [
-                    {"propertyName": "createdate", "operator": "GTE", "value": start_timestamp},
-                    {"propertyName": "createdate", "operator": "LTE", "value": end_timestamp}
-                ]
-            }
-        ]
-    elif date_field == "Last Modified Date":
-        filter_groups = [
-            {
-                "filters": [
-                    {"propertyName": "lastmodifieddate", "operator": "GTE", "value": start_timestamp},
-                    {"propertyName": "lastmodifieddate", "operator": "LTE", "value": end_timestamp}
-                ]
-            }
-        ]
-    else:
-        # Both Created and Last Modified
-        filter_groups = [
-            {
-                "filters": [
-                    {"propertyName": "createdate", "operator": "GTE", "value": start_timestamp},
-                    {"propertyName": "createdate", "operator": "LTE", "value": end_timestamp}
-                ]
-            },
-            {
-                "filters": [
-                    {"propertyName": "lastmodifieddate", "operator": "GTE", "value": start_timestamp},
-                    {"propertyName": "lastmodifieddate", "operator": "LTE", "value": end_timestamp}
-                ]
-            }
-        ]
-    
-    url = f"{HUBSPOT_API_BASE}/crm/v3/objects/contacts/search"
-    
-    # Define properties - REMOVE lifecycle stage
-    all_properties = [
-        "hs_lead_status", "lead_status", 
-        "hubspot_owner_id", "hs_assigned_owner_id",
-        "course", "program", "product", "service", "offering",
-        "course_name", "program_name", "product_name",
-        "enquired_course", "interested_course", "course_interested",
-        "program_of_interest", "course_of_interest", "product_of_interest",
-        "firstname", "lastname", "email", "phone", 
-        "createdate", "lastmodifieddate", "closedate", "hs_object_id",
-        "company", "jobtitle", "country", "amount", "total_revenue",
-        "hs_analytics_source_data_1", "refferal_lead_", "refferred_by", "servicecustomer"
-    ]
-    
-    try:
-        while True:
-            body = {
-                "filterGroups": filter_groups,
-                "properties": all_properties,
-                "associations": ["owners"],
-                "limit": 100,
-                "sorts": [{
-                    "propertyName": "createdate" if date_field == "Created Date" else "lastmodifieddate",
-                    "direction": "ASCENDING"
-                }]
-            }
-            
-            if after:
-                body["after"] = after
-            
-            response = requests.post(url, headers=headers, json=body, timeout=30)
-            
-            if response.status_code == 429:
-                time.sleep(10)
-                continue
-            
-            response.raise_for_status()
-            data = response.json()
-            
-            batch_contacts = data.get("results", [])
-            
-            if batch_contacts:
-                all_contacts.extend(batch_contacts)
-                paging_info = data.get("paging", {})
-                after = paging_info.get("next", {}).get("after")
-                
-                if not after:
-                    break
-                
-                time.sleep(0.1)
-            else:
-                break
-        
-        return all_contacts, len(all_contacts)
-        
-    except requests.exceptions.RequestException as e:
-        st.error(f" Error fetching contacts: {e}")
-        return [], 0
-    except Exception as e:
-        st.error(f" Unexpected error: {e}")
-        return [], 0
-
-# [OK] Fetch DEALS using CORRECT Stage IDs
-@st.cache_data(ttl=900, show_spinner=False)
-def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
-    """Fetch DEALS from HubSpot using CORRECT stage IDs (Cached 15 mins)."""
-    if not customer_stage_ids:
-        st.error(" No customer stage IDs configured.")
-        return [], 0
-    
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    start_timestamp = date_to_hubspot_timestamp(start_date, is_end_date=False)
-    end_timestamp = date_to_hubspot_timestamp(end_date, is_end_date=True)
-    
-    all_deals = []
-    after = None
-    
-    url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals/search"
-    
-    # [OK] CORRECT FILTER: Use Stage IDs
-    filter_groups = [{
-        "filters": [
-            {
-                "propertyName": "dealstage",
-                "operator": "IN",
-                "values": customer_stage_ids
-            },
-            {
-                "propertyName": "closedate",
-                "operator": "GTE",
-                "value": start_timestamp
-            },
-            {
-                "propertyName": "closedate",
-                "operator": "LTE", 
-                "value": end_timestamp
-            }
-        ]
-    }]
-    
-    deal_properties = [
-        "dealname",
-        "dealstage",
-        "amount",
-        "hubspot_owner_id",
-        "closedate",
-        "createdate",
-        "course",
-        "program",
-        "product",
-        "service",
-        "offering",
-        "course_name",
-        "program_name",
-        "partial_amount",
-        "hs_v2_date_entered_2107527928",  # Online pipeline stage timestamp
-        "hs_v2_date_entered_2171957962",  # Offline pipeline stage timestamp
-        "hs_v2_date_entered_contractsent", # Hot
-        "hs_v2_date_entered_presentationscheduled", # Warm
-        "hs_v2_date_entered_decisionmakerboughtin", # Cold
-        "hs_analytics_source"
-    ]
-    
-    try:
-        while True:
-            body = {
-                "filterGroups": filter_groups,
-                "properties": deal_properties,
-                "associations": ["owners", "contacts"],
-                "limit": 100,
-                "sorts": [{"propertyName": "closedate", "direction": "DESCENDING"}]
-            }
-            
-            if after:
-                body["after"] = after
-            
-            response = requests.post(url, headers=headers, json=body, timeout=30)
-            
-            if response.status_code == 429:
-                time.sleep(10)
-                continue
-            
-            response.raise_for_status()
-            data = response.json()
-            
-            batch_deals = data.get("results", [])
-            
-            if batch_deals:
-                all_deals.extend(batch_deals)
-                paging_info = data.get("paging", {})
-                after = paging_info.get("next", {}).get("after")
-                
-                if not after:
-                    break
-                
-                time.sleep(0.1)
-            else:
-                break
-        
-        return all_deals, len(all_deals)
-        
-    except requests.exceptions.RequestException as e:
-        st.error(f" Error fetching deals: {e}")
-        return [], 0
-    except Exception as e:
-        st.error(f" Unexpected error fetching deals: {e}")
-        return [], 0
-
-def detect_key_stages(all_stages):
-    """
-    Dynamically identify Stage IDs for Hot, Warm, Cold.
-    STRICTLY returns specific "Admission Confirmed" IDs for Online/Offline.
-    """
-    stage_map = {}
-
-    # Strict Admission Confirmed IDs (Online: closedwon, Offline: 1884422889)
-    # We do NOT want "Partial Payment" or other weird won stages unless explicitly requested.
-    stage_map['Admission Confirmed'] = ['closedwon', '1884422889']
-
-    for stage_id, stage_info in all_stages.items():
-        label = stage_info.get("stage_label", "").lower()
-        
-        # Hot
-        if "hot" in label:
-            stage_map['Hot'] = stage_id
-        
-        # Warm
-        elif "warm" in label:
-            stage_map['Warm'] = stage_id
-            
-        # Cold
-        elif "cold" in label:
-            stage_map['Cold'] = stage_id
-            
-    return stage_map
-
-def get_hubspot_iso_timestamp(date_obj, is_end_date=False):
-    """
-    Convert a local date (IST) to a HubSpot-compatible UTC ISO timestamp string.
-    """
-    if not date_obj:
-        return None
-        
-    # Define IST timezone
-    ist = pytz.timezone('Asia/Kolkata')
-    
-    if is_end_date:
-        # Create datetime at end of day IST
-        dt = datetime.combine(date_obj, datetime.max.time())
-        dt_ist = ist.localize(dt)
-    else:
-        # Create datetime at start of day IST
-        dt = datetime.combine(date_obj, datetime.min.time())
-        dt_ist = ist.localize(dt)
-        
-    # Convert to UTC
-    dt_utc = dt_ist.astimezone(pytz.UTC)
-    
-    # Format as ISO 8601 string with milliseconds and Z
-    return dt_utc.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-
-@st.cache_data(ttl=900, show_spinner=False)
-def fetch_team_performance_deals(api_key, start_date, end_date, stage_ids_map):
-    """
-    Fetch deals using 3 SEPARATE queries for Hot, Warm, Cold to avoid OR-logic issues.
-    Merges results by Deal ID.
-    """
-    if not stage_ids_map:
-        st.warning("Debug: stage_ids_map is empty")
-        return [], 0
-        
-    st.write(f"Debug: stage_ids_map: {stage_ids_map}")
-    st.write(f"Debug: Fetching separate cohorts for {start_date} to {end_date}")
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    # [OK] CRITICAL: Use ISO/UTC strings for Search API
-    start_utc = get_hubspot_iso_timestamp(start_date, is_end_date=False)
-    end_utc = get_hubspot_iso_timestamp(end_date, is_end_date=True)
-    
-    all_deals_map = {}
-    url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals/search"
-    
-    # Properties to fetch
-    properties = [
-        "dealname", "dealstage", "amount", "hubspot_owner_id", "closedate", "createdate",
-        "course", "program", "program_name", "course_name"
-    ]
-    # Add all date entered props
-    for stage_name, stage_id in stage_ids_map.items():
-        # [FIX] Use v2 property for correct historical data
-        properties.append(f"hs_v2_date_entered_{stage_id}")
-        
-    # Helper to run a single query
-    def fetch_cohort(filter_group, cohort_name):
-        cohort_deals = []
+def hubspot_api_request(method, url, **kwargs):
+    """Reliable HubSpot API request with exponential backoff for 429 and 5xx."""
+    max_retries = 3
+    for attempt in range(max_retries):
         try:
-            after = None
-            while True:
-                body = {
-                    "filterGroups": [filter_group],
-                    "properties": properties,
-                    "limit": 100
-                }
-                if after:
-                    body['after'] = after
-                    
-                response = requests.post(url, headers=headers, json=body, timeout=30)
-                if response.status_code == 429:
-                    time.sleep(2)
-                    continue
-                response.raise_for_status()
-                data = response.json()
-                results = data.get('results', [])
-                cohort_deals.extend(results)
-                
-                paging = data.get('paging', {})
-                after = paging.get('next', {}).get('after')
-                if not after:
-                    break
-            return cohort_deals
+            resp = hs_session.request(method, url, **kwargs)
+            if resp.status_code == 429:
+                # Manual backoff for 429 just in case HTTPAdapter missed it
+                wait = (attempt + 1) * 2
+                logger.warning(f"HubSpot Rate Limit (429). Retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            if resp.status_code >= 500:
+                wait = attempt + 1
+                logger.warning(f"HubSpot 5xx Error ({resp.status_code}). Retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            return resp
         except Exception as e:
-            st.warning(f"Warning: Failed to fetch {cohort_name} deals: {e}")
-            return []
+            if attempt == max_retries - 1:
+                raise e
+            time.sleep(attempt + 1)
+    return None
 
-    # 1. Fetch HOT
-    if 'Hot' in stage_ids_map:
-        hot_id = stage_ids_map['Hot']
-        f_group = {
-            "filters": [
-                {"propertyName": f"hs_v2_date_entered_{hot_id}", "operator": "GTE", "value": start_utc},
-                {"propertyName": f"hs_v2_date_entered_{hot_id}", "operator": "LTE", "value": end_utc}
-            ]
-        }
-        hot_deals = fetch_cohort(f_group, "Hot")
-        for d in hot_deals:
-            all_deals_map[d['id']] = d
+def get_hubspot_deals(target_month_start, target_month_end, course_filter=None):
+    """
+    Fetch closed/won HubSpot deals in the date range.
+    Returns (count, total_revenue, daily_trend_list, course_breakdown, course_breakdown_ungrouped, owner_breakdown).
+    """
+    token = get_hubspot_token()
+    if not token:
+        logger.warning("HubSpot Token missing - returning 0")
+        return 0, 0, [], {}, {}, {}
 
-    # 2. Fetch WARM
-    if 'Warm' in stage_ids_map:
-        warm_id = stage_ids_map['Warm']
-        f_group = {
-            "filters": [
-                {"propertyName": f"hs_v2_date_entered_{warm_id}", "operator": "GTE", "value": start_utc},
-                {"propertyName": f"hs_v2_date_entered_{warm_id}", "operator": "LTE", "value": end_utc}
-            ]
-        }
-        warm_deals = fetch_cohort(f_group, "Warm")
-        for d in warm_deals:
-            all_deals_map[d['id']] = d
-
-    # 3. Fetch COLD
-    if 'Cold' in stage_ids_map:
-        cold_id = stage_ids_map['Cold']
-        f_group = {
-            "filters": [
-                {"propertyName": f"hs_v2_date_entered_{cold_id}", "operator": "GTE", "value": start_utc},
-                {"propertyName": f"hs_v2_date_entered_{cold_id}", "operator": "LTE", "value": end_utc}
-            ]
-        }
-        cold_deals = fetch_cohort(f_group, "Cold")
-        for d in cold_deals:
-            all_deals_map[d['id']] = d
-
-    # Combine
-    unique_deals = list(all_deals_map.values())
-    st.write(f"Debug: Total unique team performance deals: {len(unique_deals)}")
-    return unique_deals, len(unique_deals)
-
-@st.cache_data(show_spinner=False)
-def process_contacts_data(contacts, owner_mapping=None, api_key=None, start_date=None, end_date=None):
-    """Process raw contacts data into a clean DataFrame - ABSOLUTELY NO CUSTOMER HERE."""
-    if not contacts:
-        return pd.DataFrame()
+    # OLD LOGIC: Use hardcoded admission stages
+    customer_stages = ["closedwon", "1884422889", "2208152296", "1955461874", "1955461879", "contractsent"]
+    owner_map = fetch_hubspot_owners()
     
-    processed_data = []
+    url = "https://api.hubapi.com/crm/v3/objects/deals/search"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    ist = pytz.timezone('Asia/Kolkata')
+    dt_start_ist = ist.localize(datetime.combine(target_month_start, datetime.min.time()))
+    start_ts = int(dt_start_ist.astimezone(pytz.UTC).timestamp() * 1000)
+
+    dt_end_ist = ist.localize(datetime.combine(target_month_end, datetime.max.time()))
+    end_ts = int(dt_end_ist.astimezone(pytz.UTC).timestamp() * 1000)
+
+    all_results = []
+    # If course filter is applied, we can't easily filter by "Main Course" in HubSpot Search
+    # because Main Course is a result of get_main_course() (Python logic).
+    # So we fetch all won deals and filter in memory.
     
-    for contact in contacts:
-        properties = contact.get("properties", {})
-        
-        # Extract course information
-        course_info = ""
-        course_fields = [
-            "course", "program", "product", "service", "offering",
-            "course_name", "program_name", "product_name",
-            "enquired_course", "interested_course", "course_interested",
-            "program_of_interest", "course_of_interest", "product_of_interest"
-        ]
-        
-        for field in course_fields:
-            if field in properties and properties[field] and str(properties[field]).strip():
-                course_info = properties[field]
-                break
-        
-        # Owner ID extraction
-        owner_id = (
-            properties.get("hubspot_owner_id")
-            or properties.get("hs_assigned_owner_id")
-            or ""
-        )
-        
-        if not owner_id:
-            associations = contact.get("associations", {})
-            owners = associations.get("owners", {}).get("results", [])
-            if owners:
-                owner_id = str(owners[0].get("id", ""))
-        
-        owner_id = str(owner_id)
-        
-        # Map owner ID to name
-        owner_name = ""
-        if owner_mapping:
-            if owner_id in owner_mapping:
-                owner_name = owner_mapping[owner_id]
-            else:
-                owner_name = f" Unassigned ({owner_id})" if owner_id else " Unassigned"
-        else:
-            owner_name = owner_id
-        
-        # [OK] CRITICAL: Get raw lead status
-        raw_lead_status = properties.get("hs_lead_status", "") or properties.get("lead_status", "")
-        
-        # [OK] CRITICAL: Normalize lead status - WILL NEVER RETURN "CUSTOMER"
-        # Passing dates to ensure intersection check (Created Range AND Close Range)
-        close_date_raw = properties.get("closedate", "")
-        lead_status = normalize_lead_status(raw_lead_status, close_date=close_date_raw, start_date=start_date, end_date=end_date)
-        
-        # Create full name
-        full_name = f"{properties.get('firstname', '')} {properties.get('lastname', '')}".strip()
-        
-        # [OK] NEW: CORRECTLY GET AMOUNT OR TOTAL REVENUE
-        amount_val = properties.get("amount")
-        total_rev_val = properties.get("total_revenue")
-        
-        # Use total_revenue if it exists and is not None, else use amount if it exists
-        raw_val = total_rev_val if total_rev_val else amount_val
-        
-        try:
-            parsed_amount = float(str(raw_val).replace(",", "")) if raw_val else 0.0
-        except ValueError:
-            parsed_amount = 0.0
+    # ... (rest of fetch logic remains same)
+    after = None
+    page_count = 1
+
+    while True:
+        body = {
+            "filterGroups": [{
+                "filters": [
+                    {"propertyName": "dealstage", "operator": "IN", "values": customer_stages},
+                    {"propertyName": "closedate", "operator": "BETWEEN", "value": start_ts, "highValue": end_ts}
+                ]
+            }],
+            "properties": ["amount", "closedate", "dealstage", "dealname", "hubspot_owner_id",
+                           "course", "program", "product", "service", "offering",
+                           "course_name", "program_name", "product_name",
+                           "partial_amount", "hs_v2_date_entered_2107527928", "hs_v2_date_entered_2171957962"],
+            "limit": 100
+        }
+        if after:
+            body['after'] = after
+
+        response = hubspot_api_request("POST", url, headers=headers, json=body, timeout=25)
+        if response and response.status_code == 200:
+            data = response.json()
+            results = data.get('results', [])
             
-        processed_data.append({
-            "ID": contact.get("id", ""),
-            "Full Name": full_name,
-            "Email": properties.get("email", ""),
-            "Phone": properties.get("phone", ""),
-            "Company": properties.get("company", ""),
-            "Job Title": properties.get("jobtitle", ""),
-            "Country": properties.get("country", ""),
-            "Course/Program": course_info,
-            "Course Owner": owner_name,
-            "Lead Status": lead_status,  # [OK] NO CUSTOMER HERE
-            "Created Date": properties.get("createdate", ""),
-            "Close Date": properties.get("closedate", ""),
-            "Lead Status Raw": raw_lead_status,
-            "Owner ID": owner_id,
-            "Amount": parsed_amount,
-            "Traffic Source Drill-Down 1": properties.get("hs_analytics_source_data_1", ""),
-            "Referral Lead": properties.get("refferal_lead_", ""),
-            "Referred By": properties.get("refferred_by", ""),
-            "Service-Customer": properties.get("servicecustomer", "")
-        })
-    
-    df = pd.DataFrame(processed_data)
-    
-    # [OK] No longer filtering out "CUSTOMER_IGNORE" as we map them to "Qualified Lead"
-    if not df.empty:
-        initial_count = len(df)
-        pass  # Kept structure to minimize diff, but logic is effectively disabled for now
-    
-    return df
+            # Filter out EXCLUDED_OWNERS
+            for r in results:
+                o_name = owner_map.get(str(r['properties'].get('hubspot_owner_id', '')), "")
+                if o_name in EXCLUDED_OWNERS:
+                    continue
+                all_results.append(r)
 
-@st.cache_data(show_spinner=False)
-def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stages=None, start_date=None):
-    """Process raw deals data into customer DataFrame."""
-    if not deals:
-        return pd.DataFrame()
+            paging = data.get('paging', {})
+            after = paging.get('next', {}).get('after')
+            if not after:
+                break
+            
+            page_count += 1
+            time.sleep(0.4) # Respect secondary limits
+    # Filtering and Breakdown
+    total_val = 0
+    course_breakdown = {}
+    course_breakdown_ungrouped = {}
+    owner_breakdown = {}
+    daily_counts = {}
     
-    processed_data = []
-    stage_label_map = {}
-    
-    if all_stages:
-        stage_label_map = {stage_id: info.get("stage_label", stage_id) 
-                          for stage_id, info in all_stages.items()}
-    
-    for deal in deals:
-        properties = deal.get("properties", {})
+    for r in all_results:
+        props = r['properties']
         
-        # Extract course information from deal
-        course_info = ""
-        course_fields = [
-            "course", "program", "product", "service", "offering",
-            "course_name", "program_name", "product_name"
-        ]
-        
+        # Determine Course Name for this deal
+        course_name = ''
+        course_fields = ["course", "program", "product", "service", "offering",
+                         "course_name", "program_name", "product_name"]
         for field in course_fields:
-            if field in properties and properties[field] and str(properties[field]).strip():
-                course_info = properties[field]
+            val = props.get(field)
+            if val and str(val).strip():
+                course_name = str(val).strip()
                 break
         
-        # Owner ID extraction from deal
-        owner_id = properties.get("hubspot_owner_id", "")
-        
-        if not owner_id:
-            associations = deal.get("associations", {})
-            owners = associations.get("owners", {}).get("results", [])
-            if owners:
-                owner_id = str(owners[0].get("id", ""))
+        if not course_name:
+            course_name = "Other"
 
-        # [OK] NEW: Extract associated contact ID
-        associated_contact_id = ""
-        associations = deal.get("associations", {})
-        contacts_assoc = associations.get("contacts", {}).get("results", [])
-        if contacts_assoc:
-            associated_contact_id = str(contacts_assoc[0].get("id", ""))
+        main_course = get_main_course(course_name)
         
-        owner_id = str(owner_id)
-        
-        # Map owner ID to name
-        owner_name = ""
-        if owner_mapping:
-            if owner_id in owner_mapping:
-                owner_name = owner_mapping[owner_id]
-            else:
-                owner_name = f" Unassigned ({owner_id})" if owner_id else " Unassigned"
-        else:
-            owner_name = owner_id
-        
-        # [OK] Skip excluded owners - deals from these owners are completely excluded
-        if owner_name in EXCLUDED_OWNERS:
+        # APPLY GLOBAL FILTER
+        if course_filter and main_course.lower() != course_filter.lower():
             continue
-        
-        # Parse amount
-        amount = 0
-        amount_str = properties.get("amount", "0")
-        if amount_str:
+
+        amt = 0
+        amt_str = props.get('amount')
+        if amt_str:
             try:
-                amount = float(str(amount_str).replace(",", ""))
-            except:
-                amount = 0
-        
-        # [OK] Partial Payment Deduction Logic
+                amt = float(str(amt_str).replace(",", ""))
+            except: pass
+            
+        # Partial Payment Deduction Logic
         partial_amount = 0
-        partial_amount_str = properties.get("partial_amount", "0")
+        partial_amount_str = props.get("partial_amount", "0")
         if partial_amount_str:
             try:
                 partial_amount = float(str(partial_amount_str).replace(",", ""))
-            except:
-                partial_amount = 0
-        
+            except: pass
+            
         if partial_amount > 0:
-            # Check partial payment timestamps (Online and Offline pipeline)
-            partial_ts_online = properties.get("hs_v2_date_entered_2107527928", "")
-            partial_ts_offline = properties.get("hs_v2_date_entered_2171957962", "")
+            partial_ts_online = props.get("hs_v2_date_entered_2107527928", "")
+            partial_ts_offline = props.get("hs_v2_date_entered_2171957962", "")
             partial_ts = partial_ts_online or partial_ts_offline
             
             if partial_ts:
                 try:
-                    from datetime import datetime
-                    # Parse the HubSpot timestamp
-                    if isinstance(partial_ts, str) and partial_ts:
-                        partial_dt = datetime.fromisoformat(partial_ts.replace('Z', '+00:00'))
-                        start_ts = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=partial_dt.tzinfo) if hasattr(partial_dt, 'tzinfo') and partial_dt.tzinfo else datetime.combine(start_date, datetime.min.time())
-                        
-                        # Deduct if partial payment was before reporting period start
-                        if partial_dt < start_ts:
-                            amount = amount - partial_amount
+                    partial_dt = datetime.fromisoformat(partial_ts.replace('Z', '+00:00'))
+                    if partial_dt < dt_start_ist.astimezone(pytz.UTC):
+                        amt = amt - partial_amount
                 except Exception:
-                    pass  # If timestamp parsing fails, use full amount
+                    pass
         
-        # Get close date
-        close_date = properties.get("closedate", "")
+        total_val += amt
         
-        # Get deal stage (ID)
-        deal_stage_id = properties.get("dealstage", "")
-        
-        # Convert stage ID to label if possible
-        deal_stage_label = stage_label_map.get(deal_stage_id, deal_stage_id)
-        
-        # [OK] NEW: Extract Stage History
-        date_entered_hot = properties.get("hs_v2_date_entered_contractsent", "")
-        date_entered_warm = properties.get("hs_v2_date_entered_presentationscheduled", "")
-        date_entered_cold = properties.get("hs_v2_date_entered_decisionmakerboughtin", "")
-        
-        source = properties.get("hs_analytics_source", "")
+        # Course Breakdown
+        if main_course not in course_breakdown:
+            course_breakdown[main_course] = {"count": 0, "revenue": 0}
+        course_breakdown[main_course]["count"] += 1
+        course_breakdown[main_course]["revenue"] += amt
 
-        processed_data.append({
-            "Customer ID": deal.get("id", ""),
-            "Deal Name": properties.get("dealname", ""),
-            "Course/Program": course_info,
-            "Course Owner": owner_name,
-            "Amount": amount,
-            "Close Date": close_date,
-            "Deal Stage ID": deal_stage_id,
-            "Deal Stage Label": deal_stage_label,
-            "Associated Contact ID": associated_contact_id, # [OK] NEW: Link to contact
-            "Is Customer": 1,  # [OK] ALL these deals are customers
-            "Was_Hot": 1 if date_entered_hot else 0,
-            "Was_Warm": 1 if date_entered_warm else 0,
-            "Was_Cold": 1 if date_entered_cold else 0,
-            "Analytics Source": source
-        })
-    
-    df = pd.DataFrame(processed_data)
-    
-    return df
+        if course_name not in course_breakdown_ungrouped:
+            course_breakdown_ungrouped[course_name] = {"count": 0, "revenue": 0}
+        course_breakdown_ungrouped[course_name]["count"] += 1
+        course_breakdown_ungrouped[course_name]["revenue"] += amt
+        
+        # Owner Breakdown
+        o_id = str(props.get('hubspot_owner_id', ''))
+        o_name = owner_map.get(o_id, f"Unknown ({o_id})" if o_id else "Unassigned")
+        if o_name not in owner_breakdown:
+            owner_breakdown[o_name] = {"count": 0, "revenue": 0}
+        owner_breakdown[o_name]["count"] += 1
+        owner_breakdown[o_name]["revenue"] += amt
 
-def process_team_performance_metrics(deals, start_date, end_date, stage_ids_map, owner_mapping):
+        # Daily trend should track admission counts, not revenue, for the worm graph.
+        try:
+            close_str = props.get('closedate')
+            if close_str:
+                if str(close_str).isdigit():
+                    dt = datetime.fromtimestamp(int(close_str)/1000, tz=pytz.UTC)
+                else:
+                    dt = datetime.fromisoformat(str(close_str).replace('Z', '+00:00'))
+                date_str = dt.astimezone(ist).strftime('%Y-%m-%d')
+                daily_counts[date_str] = daily_counts.get(date_str, 0) + 1
+        except: pass
+
+    # Format daily_trend_list
+    daily_trend_list = []
+    curr = target_month_start
+    while curr <= target_month_end:
+        ds = curr.strftime('%Y-%m-%d')
+        daily_trend_list.append({"Date": ds, "Count": daily_counts.get(ds, 0)})
+        curr += timedelta(days=1)
+
+    # Count = sum of all filtered results (already filtered in the loop above via continue)
+    total_count = sum(v["count"] for v in course_breakdown.values())
+    return total_count, total_val, daily_trend_list, course_breakdown, course_breakdown_ungrouped, owner_breakdown
+
+def get_hubspot_contacts(target_month_start, target_month_end, lead_status="Trial Phase", course_filter=None):
     """
-    Process deals strictly based on 'Date Entered Stage' using separate ISO timestamps.
-    Implements DIRECT CONVERSION logic: Hot->Customer only if Hot was the LAST stage before Admission Confirmed.
+    Fetch HubSpot contacts with a specific lead status (Trial Phase).
+    Returns (count, course_breakdown_dict, daily_trend_list).
     """
-    if not deals:
-         return pd.DataFrame(columns=['Course Owner', 'Hot', 'Warm', 'Cold', 'Hot_Customer', 'Warm_Customer', 'Cold_Customer', 'HOT-CUSTOMER CONVERSION', 'WARM-CUSTOMER CONVERSION', 'COLD-CUSTOMER CONVERSION'])
+    token = get_hubspot_token()
+    if not token:
+        logger.warning("HubSpot Token missing - returning 0 for contacts")
+        return 0, {}, []
 
-    # Convert start/end to UTC ISO strings for comparison
-    start_iso = get_hubspot_iso_timestamp(start_date, is_end_date=False)
-    end_iso = get_hubspot_iso_timestamp(end_date, is_end_date=True)
-    
-    owner_metrics = {}
-    
-    hot_id = stage_ids_map.get('Hot')
-    warm_id = stage_ids_map.get('Warm')
-    cold_id = stage_ids_map.get('Cold')
-    
-    # Strict list of Won IDs
-    won_ids = stage_ids_map.get('Admission Confirmed', [])
-    if isinstance(won_ids, str):
-        won_ids = [won_ids]
-    
-    for deal in deals:
-        props = deal.get('properties', {})
-        owner_id = props.get('hubspot_owner_id')
-        owner_name = owner_mapping.get(owner_id, "Unknown Owner") if owner_mapping else str(owner_id)
-        current_stage = props.get('dealstage')
-        
-        if owner_name not in owner_metrics:
-            owner_metrics[owner_name] = {
-                'Hot': 0, 'Warm': 0, 'Cold': 0,
-                'Hot_Customer': 0, 'Warm_Customer': 0, 'Cold_Customer': 0
-            }
-            
-        def is_in_range_iso(val):
-            if not val: return False
-            return start_iso <= val <= end_iso
+    url = "https://api.hubapi.com/crm/v3/objects/contacts/search"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-        # Get Entry Dates using v2 properties
-        date_hot = props.get(f"hs_v2_date_entered_{hot_id}") if hot_id else None
-        date_warm = props.get(f"hs_v2_date_entered_{warm_id}") if warm_id else None
-        date_cold = props.get(f"hs_v2_date_entered_{cold_id}") if cold_id else None
-        
-        # Check basic cohort counts (Entered Stage in Range)
-        hot_in_range = is_in_range_iso(date_hot)
-        warm_in_range = is_in_range_iso(date_warm)
-        cold_in_range = is_in_range_iso(date_cold)
-        
-        if hot_in_range:
-            owner_metrics[owner_name]['Hot'] += 1
-        if warm_in_range:
-            owner_metrics[owner_name]['Warm'] += 1
-        if cold_in_range:
-            owner_metrics[owner_name]['Cold'] += 1
-            
-        # DIRECT CONVERSION LOGIC
-        # Only check if currently in a Won stage (Admission Confirmed)
-        if current_stage in won_ids:
-            # Determine "Latest Stage" among Hot/Warm/Cold
-            # We compare the entry timestamps. The largest timestamp is the latest.
-            
-            stages_with_dates = []
-            if date_hot: stages_with_dates.append(('Hot', date_hot))
-            if date_warm: stages_with_dates.append(('Warm', date_warm))
-            if date_cold: stages_with_dates.append(('Cold', date_cold))
-            
-            if stages_with_dates:
-                # Sort by date descending (latest first)
-                stages_with_dates.sort(key=lambda x: x[1], reverse=True)
-                latest_stage = stages_with_dates[0][0]
-                
-                # Attribute conversion to the latest stage IF that stage's entry was in range
-                if latest_stage == 'Hot' and hot_in_range:
-                    owner_metrics[owner_name]['Hot_Customer'] += 1
-                elif latest_stage == 'Warm' and warm_in_range:
-                    owner_metrics[owner_name]['Warm_Customer'] += 1
-                elif latest_stage == 'Cold' and cold_in_range:
-                    owner_metrics[owner_name]['Cold_Customer'] += 1
-                     
-    # Create DataFrame
-    data = []
-    for owner, metrics in owner_metrics.items():
-        row = {'Course Owner': owner}
-        row.update(metrics)
-        
-        # Calculate percentages
-        row['HOT-CUSTOMER CONVERSION'] = (row['Hot_Customer'] / row['Hot'] * 100) if row['Hot'] > 0 else 0
-        row['WARM-CUSTOMER CONVERSION'] = (row['Warm_Customer'] / row['Warm'] * 100) if row['Warm'] > 0 else 0
-        row['COLD-CUSTOMER CONVERSION'] = (row['Cold_Customer'] / row['Cold'] * 100) if row['Cold'] > 0 else 0
-        
-        data.append(row)
-        
-    df = pd.DataFrame(data)
+    # Define course properties to check (matching ff.txt logic)
+    course_props = [
+        "course", "program", "product", "service", "offering",
+        "course_name", "program_name", "product_name",
+        "enquired_course", "interested_course", "course_interested",
+        "program_of_interest", "course_of_interest", "product_of_interest"
+    ]
+    all_props = ["hs_lead_status", "hubspot_owner_id", "createdate"] + course_props
     
-    # Sort by total Hot desc
-    if not df.empty and 'Hot' in df.columns:
-        df = df.sort_values('Hot', ascending=False)
-        
-    return df
+    ist = pytz.timezone('Asia/Kolkata')
+    dt_start_ist = ist.localize(datetime.combine(target_month_start, datetime.min.time()))
+    start_ts = int(dt_start_ist.astimezone(pytz.UTC).timestamp() * 1000)
 
-def group_team_performance_metrics(performance_df):
-    """
-    Split the full performance DataFrame into team-specific DataFrames.
-    Adds a TOTAL row to each team DataFrame.
-    """
-    if performance_df.empty:
-        return {}
-        
-    team_results = {}
+    dt_end_ist = ist.localize(datetime.combine(target_month_end, datetime.max.time()))
+    end_ts = int(dt_end_ist.astimezone(pytz.UTC).timestamp() * 1000)
+
+    all_contacts = []
+    after = None
+    page_count = 1
+
+    while True:
+        body = {
+            "filterGroups": [{
+                "filters": [
+                    {"propertyName": "hs_lead_status", "operator": "EQ", "value": lead_status},
+                    {"propertyName": "createdate", "operator": "BETWEEN", "value": start_ts, "highValue": end_ts}
+                ]
+            }],
+            "properties": all_props,
+            "limit": 100
+        }
+        if after:
+            body['after'] = after
+
+        response = hubspot_api_request("POST", url, headers=headers, json=body, timeout=25)
+        if response and response.status_code == 200:
+            data = response.json()
+            results = data.get('results', [])
+            all_contacts.extend(results)
+
+            paging = data.get('paging', {})
+            after = paging.get('next', {}).get('after')
+            if not after:
+                break
+            
+            page_count += 1
+            time.sleep(0.4)
+        else:
+            msg = f"HubSpot Contacts Fetch failed on page {page_count}"
+            logger.error(msg)
+            raise Exception(msg)
+
+    # Process results
+    course_counts = {}
+    daily_trend = {}
     
-    # Ensure all columns exist
-    cols = ['Course Owner', 'Hot', 'Warm', 'Cold', 
-            'Hot_Customer', 'Warm_Customer', 'Cold_Customer',
-            'HOT-CUSTOMER CONVERSION', 'WARM-CUSTOMER CONVERSION', 'COLD-CUSTOMER CONVERSION',
-            'Customer Count', 'Customer Revenue']
-            
-    for col in cols:
-        if col not in performance_df.columns:
-            performance_df[col] = 0
-            
-    for team_name, members in TEAM_MAPPING.items():
-        # Case insensitive matching
-        team_members_lower = [m.lower() for m in members]
+    for c in all_contacts:
+        props = c.get('properties', {})
         
-        # Filter data
-        team_df = performance_df[performance_df['Course Owner'].str.lower().isin(team_members_lower)].copy()
+        # 1. Daily trend
+        create_str = props.get('createdate')
+        if create_str:
+            try:
+                # HubSpot search returns timestamps for createdate
+                if create_str.isdigit():
+                    dt = datetime.fromtimestamp(int(create_str)/1000, tz=pytz.UTC)
+                else:
+                    dt = datetime.fromisoformat(create_str.replace('Z', '+00:00'))
+                date_str = dt.astimezone(ist).strftime('%Y-%m-%d')
+                daily_trend[date_str] = daily_trend.get(date_str, 0) + 1
+            except:
+                pass
+
+        # 2. Course breakdown
+        raw_course = "Unknown Course"
+        for field in course_props:
+            val = props.get(field)
+            if val and str(val).strip():
+                raw_course = str(val).strip()
+                break
         
-        if team_df.empty:
+        main_course = get_main_course(raw_course)
+        
+        # APPLY GLOBAL FILTER
+        if course_filter and main_course.lower() != course_filter.lower():
             continue
             
-        # Calculate Total Row
-        total_row = {'Course Owner': 'TOTAL'}
-        
-        # Sum counts
-        sum_cols = ['Hot', 'Warm', 'Cold', 'Hot_Customer', 'Warm_Customer', 'Cold_Customer', 
-                    'Customer Count', 'Customer Revenue']
-        for col in sum_cols:
-            if col in team_df.columns:
-                total_row[col] = team_df[col].sum()
-            
-        # Recalculate percentages for TOTAL row
-        total_hot = total_row.get('Hot', 0)
-        total_hot_cust = total_row.get('Hot_Customer', 0)
-        total_row['HOT-CUSTOMER CONVERSION'] = (total_hot_cust / total_hot * 100) if total_hot > 0 else 0
-        
-        total_warm = total_row.get('Warm', 0)
-        total_warm_cust = total_row.get('Warm_Customer', 0)
-        total_row['WARM-CUSTOMER CONVERSION'] = (total_warm_cust / total_warm * 100) if total_warm > 0 else 0
-        
-        total_cold = total_row.get('Cold', 0)
-        total_cold_cust = total_row.get('Cold_Customer', 0)
-        total_row['COLD-CUSTOMER CONVERSION'] = (total_cold_cust / total_cold * 100) if total_cold > 0 else 0
-        
-        # Append total row
-        total_df = pd.DataFrame([total_row])
-        team_df = pd.concat([team_df, total_df], ignore_index=True)
-        
-        team_results[team_name] = team_df
-        
-    return team_results
+        course_counts[main_course] = course_counts.get(main_course, 0) + 1
 
-def create_metric_1(df):
-    """METRIC 1: Course x Lead Status - NO CUSTOMER"""
-    if df.empty or 'Course/Program' not in df.columns:
-        return pd.DataFrame()
-    
-    df_course = df[df['Course/Program'].notna() & (df['Course/Program'] != '')].copy()
-    
-    if df_course.empty:
-        return pd.DataFrame()
-    
-    df_course['Course_Clean'] = df_course['Course/Program'].str.strip()
-    
-    pivot_counts = pd.pivot_table(df_course, index='Course_Clean', columns='Lead Status', values='ID', aggfunc='count', fill_value=0)
-    pivot_amounts = pd.pivot_table(df_course[df_course['Lead Status'] == 'Qualified Lead'], index='Course_Clean', values='Amount', aggfunc='sum', fill_value=0)
-    
-    pivot = pivot_counts.reset_index().rename(columns={'Course_Clean': 'Course'})
-    if not pivot_amounts.empty:
-        pivot = pd.merge(pivot, pivot_amounts.rename(columns={'Amount': 'Qualified Lead Amount'}).reset_index().rename(columns={'Course_Clean': 'Course'}), on='Course', how='left').fillna(0)
-    else:
-        pivot['Qualified Lead Amount'] = 0
-    
-    if len(pivot.columns) > 1:
-        status_cols = [col for col in pivot.columns if col != 'Course']
-        pivot['Total'] = pivot[status_cols].sum(axis=1)
-    
-    return pivot
+    # Format trend for worm graph
+    sorted_trend = []
+    curr = target_month_start
+    while curr <= target_month_end:
+        ds = curr.strftime('%Y-%m-%d')
+        sorted_trend.append({"Date": ds, "Admissions": daily_trend.get(ds, 0)})
+        curr += timedelta(days=1)
 
-def create_metric_2(df):
-    """METRIC 2: Course Owner x Lead Status - NO CUSTOMER"""
-    if df.empty or 'Course Owner' not in df.columns:
-        return pd.DataFrame()
-    
-    df_owner = df[df['Course Owner'].notna() & (df['Course Owner'] != '')].copy()
-    
-    if df_owner.empty:
-        return pd.DataFrame()
-    
-    pivot = pd.pivot_table(
-        df_owner,
-        index='Course Owner',
-        columns='Lead Status',
-        values=['ID', 'Amount'],
-        aggfunc={'ID': 'count', 'Amount': 'sum'},
-        fill_value=0
-    )
-    
-    # Flatten multi-index columns
-    if isinstance(pivot.columns, pd.MultiIndex):
-        # We want: Status_Count or Status_Amount
-        # Actually, simpler: keep standard pivot for counts, and separate for amounts
-        pass
-    
-    # Let's do it cleaner for Metric 4/5 integration
-    pivot_counts = pd.pivot_table(df_owner, index='Course Owner', columns='Lead Status', values='ID', aggfunc='count', fill_value=0)
-    pivot_amounts = pd.pivot_table(df_owner[df_owner['Lead Status'] == 'Qualified Lead'], index='Course Owner', values='Amount', aggfunc='sum', fill_value=0)
-    
-    pivot = pivot_counts.reset_index()
-    if not pivot_amounts.empty:
-        pivot = pd.merge(pivot, pivot_amounts.rename(columns={'Amount': 'Qualified Lead Amount'}), on='Course Owner', how='left').fillna(0)
-    else:
-        pivot['Qualified Lead Amount'] = 0
-    
-    if len(pivot.columns) > 2: # Owner + Lead Statuses + Amount
-        status_cols = [col for col in pivot.columns if col not in ['Course Owner', 'Qualified Lead Amount']]
-        pivot['Total'] = pivot[status_cols].sum(axis=1)
-    
-    return pivot
+    return len(all_contacts), course_counts, sorted_trend
 
-def create_metric_4(df_contacts, df_customers):
-    """METRIC 4: Course Owner Performance SUMMARY"""
-    if df_contacts.empty or 'Course Owner' not in df_contacts.columns:
-        return pd.DataFrame()
-    
-    owner_lead_pivot = create_metric_2(df_contacts)
-    
-    if owner_lead_pivot.empty:
-        return pd.DataFrame()
-    
-    # Get customer data from deals
-    if df_customers is not None and not df_customers.empty and 'Course Owner' in df_customers.columns:
-        customer_by_owner = df_customers.groupby('Course Owner').agg(
-            Customer_Count=('Is Customer', 'sum'),
-            Customer_Revenue=('Amount', 'sum'),
-            # [OK] NEW: Count by Stage History
-            Hot_Customer=('Was_Hot', 'sum'),
-            Warm_Customer=('Was_Warm', 'sum'),
-            Cold_Customer=('Was_Cold', 'sum')
-        ).reset_index()
-    else:
-        customer_by_owner = pd.DataFrame(columns=['Course Owner', 'Customer_Count', 'Customer_Revenue'])
-    
-    # Merge lead data with customer data
-    result_df = owner_lead_pivot.copy()
-    result_df['Customer'] = 0
-    
-    if not customer_by_owner.empty:
-        result_df = pd.merge(result_df, customer_by_owner, on='Course Owner', how='left')
-        result_df['Customer_Count'] = result_df['Customer_Count'].fillna(0)
-        result_df['Customer_Revenue'] = result_df['Customer_Revenue'].fillna(0)
-        result_df['Customer'] = result_df['Customer_Count']
-        # [OK] Revenue from qualified leads (CONTACTS) is already in result_df as 'Qualified Lead Amount'
-    else:
-        result_df['Customer_Count'] = 0
-        result_df['Customer_Revenue'] = 0
-    
-    # Deal Leads = Hot + Warm + Cold + Customer
-    deal_statuses = ['Cold', 'Warm', 'Hot']
-    result_df['Deal Leads'] = 0
-    
-    for status in deal_statuses:
-        if status in result_df.columns:
-            result_df['Deal Leads'] += result_df[status].fillna(0)
-    
-    result_df['Deal Leads'] += result_df['Customer']
-    
-    # Calculate percentages
-    if 'Total' in result_df.columns:
-        result_df = result_df.rename(columns={'Total': 'Grand Total'})
-        result_df['Deal %'] = np.where(
-            result_df['Grand Total'] > 0,
-            (result_df['Deal Leads'] / result_df['Grand Total'] * 100).round(2),
-            0
-        )
-    else:
-        result_df['Deal %'] = 0
-    
-    result_df['Customer %'] = np.where(
-        result_df['Deal Leads'] > 0,
-        (result_df['Customer'] / result_df['Deal Leads'] * 100).round(2),
-        0
-    )
-    
-    if 'Grand Total' in result_df.columns:
-        result_df['Lead->Customer %'] = np.where(
-            result_df['Grand Total'] > 0,
-            (result_df['Customer'] / result_df['Grand Total'] * 100).round(2),
-            0
-        )
-        result_df['Lead->Deal %'] = np.where(
-            result_df['Grand Total'] > 0,
-            (result_df['Deal Leads'] / result_df['Grand Total'] * 100).round(2),
-            0
-        )
-    else:
-        result_df['Lead->Customer %'] = 0
-        result_df['Lead->Deal %'] = 0
-    
-    # Select columns
-    base_cols = ['Course Owner']
-    status_cols = ['Cold', 'Hot', 'Warm', 'Qualified Lead']
-    existing_status_cols = [col for col in status_cols if col in result_df.columns]
-    
-    # [OK] NEW: Add Conversion Columns
-    conversion_cols = ['Hot_Customer', 'Warm_Customer', 'Cold_Customer']
-    existing_conversion_cols = [col for col in conversion_cols if col in result_df.columns]
-    
-    final_cols = base_cols + existing_status_cols + existing_conversion_cols + [
-        'Qualified Lead Amount',
-        'Customer', 
-        'Customer_Revenue',
-        'Deal Leads', 
-        'Deal %', 
-        'Customer %',
-        'Lead->Customer %',
-        'Lead->Deal %',
-        'Grand Total'
-    ]
-    
-    final_df = result_df[final_cols].copy()
-    
-    if 'Grand Total' in final_df.columns:
-        final_df = final_df.sort_values('Grand Total', ascending=False)
-    
-    return final_df
+def _fetch_all_results_paginated(url, headers, body, results_key='results'):
+    """Helper to fetch all pages of a HubSpot search/list."""
+    all_results = []
+    after = None
+    while True:
+        if after: body['after'] = after
+        try:
+            resp = hubspot_api_request("POST", url, headers=headers, json=body, timeout=25).json()
+            results = resp.get(results_key, [])
+            all_results.extend(results)
+            paging = resp.get('paging', {})
+            after = paging.get('next', {}).get('after')
+            if not after: break
+            # Removed time.sleep(0.3) for speed - HubSpot rate limits are usually high enough for these bursts
+        except Exception as e:
+            logger.error(f"HubSpot Pagination Error: {e}")
+            break
+    return all_results
 
-# [OK] NEW: METRIC 5 - Course Performance KPI Table (Same as Owner Performance but for Courses)
-def create_metric_5(df_contacts, df_customers):
-    """METRIC 5: Course Performance KPI Table"""
-    if df_contacts.empty or 'Course/Program' not in df_contacts.columns:
-        return pd.DataFrame()
-    
-    course_lead_pivot = create_metric_1(df_contacts)
-    
-    if course_lead_pivot.empty:
-        return pd.DataFrame()
-    
-    # Get customer data from deals by course
-    if df_customers is not None and not df_customers.empty and 'Course/Program' in df_customers.columns:
-        customer_by_course = df_customers.groupby('Course/Program').agg(
-            Customer_Count=('Is Customer', 'sum'),
-            Customer_Revenue=('Amount', 'sum')
-        ).reset_index()
-    else:
-        customer_by_course = pd.DataFrame(columns=['Course/Program', 'Customer_Count', 'Customer_Revenue'])
-    
-    # Merge lead data with customer data
-    result_df = course_lead_pivot.copy()
-    result_df = result_df.rename(columns={'Course': 'Course'})
-    result_df['Customer'] = 0
-    
-    if not customer_by_course.empty:
-        result_df = pd.merge(result_df, customer_by_course, left_on='Course', right_on='Course/Program', how='left')
-        result_df['Customer_Count'] = result_df['Customer_Count'].fillna(0)
-        result_df['Customer_Revenue'] = result_df['Customer_Revenue'].fillna(0)
-        result_df['Customer'] = result_df['Customer_Count']
-        # [OK] Qualified Lead Amount already present in result_df
-        # Drop the extra course column from merge
-        result_df = result_df.drop(columns=['Course/Program'], errors='ignore')
-    else:
-        result_df['Customer_Count'] = 0
-        result_df['Customer_Revenue'] = 0
-    
-    # Deal Leads = Hot + Warm + Cold + Customer
-    deal_statuses = ['Cold', 'Warm', 'Hot']
-    result_df['Deal Leads'] = 0
-    
-    for status in deal_statuses:
-        if status in result_df.columns:
-            result_df['Deal Leads'] += result_df[status].fillna(0)
-    
-    result_df['Deal Leads'] += result_df['Customer']
-    
-    # Calculate percentages
-    if 'Total' in result_df.columns:
-        result_df = result_df.rename(columns={'Total': 'Grand Total'})
-        result_df['Deal %'] = np.where(
-            result_df['Grand Total'] > 0,
-            (result_df['Deal Leads'] / result_df['Grand Total'] * 100).round(2),
-            0
-        )
-    else:
-        result_df['Deal %'] = 0
-    
-    result_df['Customer %'] = np.where(
-        result_df['Deal Leads'] > 0,
-        (result_df['Customer'] / result_df['Deal Leads'] * 100).round(2),
-        0
-    )
-    
-    if 'Grand Total' in result_df.columns:
-        result_df['Lead->Customer %'] = np.where(
-            result_df['Grand Total'] > 0,
-            (result_df['Customer'] / result_df['Grand Total'] * 100).round(2),
-            0
-        )
-        result_df['Lead->Deal %'] = np.where(
-            result_df['Grand Total'] > 0,
-            (result_df['Deal Leads'] / result_df['Grand Total'] * 100).round(2),
-            0
-        )
-    else:
-        result_df['Lead->Customer %'] = 0
-        result_df['Lead->Deal %'] = 0
-    
-    # Select columns
-    base_cols = ['Course']
-    status_cols = ['Cold', 'Hot', 'Warm']
-    existing_status_cols = [col for col in status_cols if col in result_df.columns]
-    
-    final_cols = base_cols + existing_status_cols + [
-        'Customer', 
-        'Customer_Revenue',
-        'Deal Leads', 
-        'Deal %', 
-        'Customer %',
-        'Lead->Customer %',
-        'Lead->Deal %',
-        'Grand Total'
-    ]
-    
-    final_df = result_df[final_cols].copy()
-    
-    if 'Grand Total' in final_df.columns:
-        final_df = final_df.sort_values('Grand Total', ascending=False)
-    
-    return final_df
+LEAD_CONTACT_COURSE_FIELDS = [
+    "course", "enquired_course", "program", "program_of_interest",
+    "product", "service", "offering",
+    "course_name", "program_name", "product_name",
+    "interested_course", "course_interested",
+    "course_of_interest", "product_of_interest"
+]
 
-# [OK] NEW: Course Revenue Analysis
-def create_course_revenue(df_customers):
-    """Calculate revenue by course from customer data."""
-    if df_customers is None or df_customers.empty or 'Course/Program' not in df_customers.columns or 'Amount' not in df_customers.columns:
-        return pd.DataFrame()
-    
-    # Filter only courses with revenue
-    customer_df = df_customers[(df_customers['Course/Program'].notna()) & (df_customers['Course/Program'] != '')].copy()
-    
-    if customer_df.empty:
-        return pd.DataFrame()
-    
-    # Clean course names
-    customer_df['Course_Clean'] = customer_df['Course/Program'].str.strip()
-    
-    # Group by course
-    revenue_df = customer_df.groupby('Course_Clean').agg(
-        Customers=('Is Customer', 'sum'),
-        Revenue=('Amount', 'sum')
-    ).reset_index().rename(columns={'Course_Clean': 'Course'})
-    
-    # Calculate revenue per customer
-    revenue_df['Revenue per Customer'] = np.where(
-        revenue_df['Customers'] > 0,
-        (revenue_df['Revenue'] / revenue_df['Customers']).round(0),
-        0
-    )
-    
-    # Sort by revenue
-    revenue_df = revenue_df.sort_values('Revenue', ascending=False)
-    
-    return revenue_df
+LEAD_DEAL_COURSE_FIELDS = [
+    "course", "program", "product", "service", "offering",
+    "course_name", "program_name", "product_name"
+]
 
-# [OK] NEW: Volume vs Conversion Matrix
-def create_volume_conversion_matrix(metric_1, df_contacts, df_customers):
-    """Create a 2x2 matrix to classify courses based on volume and conversion."""
-    if metric_1.empty or 'Total' not in metric_1.columns:
-        return pd.DataFrame()
-    
-    # Get customer data by course
-    customer_by_course = {}
-    if df_customers is not None and not df_customers.empty and 'Course/Program' in df_customers.columns:
-        for _, row in df_customers.iterrows():
-            course = row['Course/Program']
-            if pd.notna(course) and course != '':
-                course_clean = str(course).strip()
-                customer_by_course[course_clean] = customer_by_course.get(course_clean, 0) + 1
-    
-    # Calculate conversion % for each course
-    matrix_data = []
-    
-    for _, row in metric_1.iterrows():
-        course = row['Course']
-        total = row.get('Total', 0)
-        
-        # Get customer count for this course
-        customer_count = customer_by_course.get(course, 0)
-        
-        # Calculate conversion %
-        conversion_pct = (customer_count / total * 100) if total > 0 else 0
-        
-        matrix_data.append({
-            'Course': course,
-            'Volume': total,
-            'Conversion %': round(conversion_pct, 1),
-            'Customer Count': customer_count
-        })
-    
-    matrix_df = pd.DataFrame(matrix_data)
-    
-    if len(matrix_df) < 2:
-        return matrix_df
-    
-    # Calculate thresholds (median)
-    volume_threshold = matrix_df['Volume'].median()
-    conversion_threshold = matrix_df['Conversion %'].median()
-    
-    # Classify each course
-    def classify_course(row):
-        if row['Volume'] >= volume_threshold and row['Conversion %'] >= conversion_threshold:
-            return " Star"
-        elif row['Volume'] < volume_threshold and row['Conversion %'] >= conversion_threshold:
-            return " Potential"
-        elif row['Volume'] >= volume_threshold and row['Conversion %'] < conversion_threshold:
-            return " Burn (High Volume, Low Conversion)"
-        else:
-            return " Weak"
-    
-    matrix_df['Segment'] = matrix_df.apply(classify_course, axis=1)
-    
-    return matrix_df
-
-def calculate_previous_period(start_date, end_date):
-    """Calculate the previous period based on the current date range."""
-    # If starts on 1st of month, compare to previous FULL month
-    if start_date.day == 1:
-        # Previous month end is start_date - 1 day
-        prev_end = start_date - timedelta(days=1)
-        # Previous month start is 1st of that month
-        prev_start = prev_end.replace(day=1)
-        return prev_start, prev_end
-    
-    # Otherwise just shift specific number of days back
-    delta = end_date - start_date
-    days_diff = delta.days + 1
-    
-    prev_end = start_date - timedelta(days=1)
-    prev_start = prev_end - timedelta(days=days_diff - 1)
-        
-    return prev_start, prev_end
-
-def create_comparison_data(df_contacts, df_customers, comparison_type, item1, item2):
-    """Create comparison data for different comparison types."""
-    if df_contacts.empty:
+def _parse_hubspot_datetime(raw_value):
+    """Parse HubSpot timestamps that may be epoch milliseconds or ISO strings."""
+    if not raw_value:
         return None
-    
-    results = {}
-    
-    if comparison_type == "Course vs Course":
-        # Get course data
-        metric_1 = create_metric_1(df_contacts)
-        if not metric_1.empty:
-            # Filter for selected courses
-            course1_data = metric_1[metric_1['Course'] == item1] if item1 in metric_1['Course'].values else pd.DataFrame()
-            course2_data = metric_1[metric_1['Course'] == item2] if item2 in metric_1['Course'].values else pd.DataFrame()
-            
-            results['type'] = 'course_vs_course'
-            results['item1'] = item1
-            results['item2'] = item2
-            results['data1'] = course1_data
-            results['data2'] = course2_data
-            
-            # Calculate comparison metrics
-            if not course1_data.empty and not course2_data.empty:
-                # Deal Leads (Cold + Warm + Hot)
-                deal_cols = ['Cold', 'Warm', 'Hot']
-                deal1 = course1_data[deal_cols].sum(axis=1).values[0] if all(col in course1_data.columns for col in deal_cols) else 0
-                total1 = course1_data['Total'].values[0] if 'Total' in course1_data.columns else 1
-                deal_pct1 = (deal1 / total1 * 100) if total1 > 0 else 0
-                
-                deal2 = course2_data[deal_cols].sum(axis=1).values[0] if all(col in course2_data.columns for col in deal_cols) else 0
-                total2 = course2_data['Total'].values[0] if 'Total' in course2_data.columns else 1
-                deal_pct2 = (deal2 / total2 * 100) if total2 > 0 else 0
-                
-                results['deal_pct1'] = round(deal_pct1, 1)
-                results['deal_pct2'] = round(deal_pct2, 1)
-    
-    elif comparison_type == "Owner vs Owner":
-        # Get owner data
-        metric_4 = create_metric_4(df_contacts, df_customers)
-        if not metric_4.empty:
-            # Filter for selected owners
-            owner1_data = metric_4[metric_4['Course Owner'] == item1] if item1 in metric_4['Course Owner'].values else pd.DataFrame()
-            owner2_data = metric_4[metric_4['Course Owner'] == item2] if item2 in metric_4['Course Owner'].values else pd.DataFrame()
-            
-            results['type'] = 'owner_vs_owner'
-            results['item1'] = item1
-            results['item2'] = item2
-            results['data1'] = owner1_data
-            results['data2'] = owner2_data
-    
-    elif comparison_type == "Course vs Owner":
-        # This is more complex - need to get course data for specific owner
-        results['type'] = 'course_vs_owner'
-        results['item1'] = item1  # Course
-        results['item2'] = item2  # Owner
-        
-        # Get courses for this owner
-        owner_courses = df_contacts[(df_contacts['Course Owner'] == item2) & (df_contacts['Course/Program'].notna()) & (df_contacts['Course/Program'] != '')].copy()
-        
-        if not owner_courses.empty:
-            # Create pivot for owner's courses
-            pivot = pd.pivot_table(
-                owner_courses,
-                index='Course/Program',
-                columns='Lead Status',
-                values='ID',
-                aggfunc='count',
-                fill_value=0
-            )
-            
-            results['owner_courses'] = pivot.reset_index()
-    
-    return results
+    try:
+        text = str(raw_value)
+        if text.isdigit():
+            return datetime.fromtimestamp(int(text) / 1000, tz=pytz.UTC)
+        return datetime.fromisoformat(text.replace('Z', '+00:00'))
+    except Exception:
+        return None
 
-def calculate_kpis(df_contacts, df_customers):
-    """Calculate key performance indicators."""
-    if df_contacts.empty:
-        return {
-            'total_leads': 0, 'deal_leads': 0, 'cold': 0, 'warm': 0, 'hot': 0,
-            'customer': 0, 'customer_in_leads': 0, 'new_lead': 0, 'not_connected': 0,
-            'not_interested': 0, 'not_qualified': 0, 'duplicate': 0, 'qualified_lead': 0,
-            'upselling': 0, 'course_shifting': 0, 'closed_lost': 0,
-            'lead_to_customer_pct': 0, 'lead_to_deal_pct': 0, 'deal_to_customer_pct': 0,
-            'total_revenue': 0, 'avg_revenue_per_customer': 0,
-            'top_course': "N/A", 'top_owner': "N/A", 'top_revenue_course': "N/A",
-            'top_revenue_amount': 0, 'dropoff_ratio': 0
+def _resolve_contact_owner_id(contact):
+    """Resolve contact owner using the same fallback order as the reference analytics."""
+    properties = contact.get("properties", {})
+    owner_id = (
+        properties.get("hubspot_owner_id")
+        or properties.get("hs_assigned_owner_id")
+        or ""
+    )
+    return str(owner_id) if owner_id else ""
+
+def _is_excluded_owner_id(owner_id, owner_map):
+    """Check whether an owner id maps to an excluded owner name."""
+    if not owner_id:
+        return False
+    owner_name = owner_map.get(str(owner_id), "")
+    return owner_name in EXCLUDED_OWNERS
+
+def _chunked(items, size):
+    """Yield fixed-size chunks from a list."""
+    for idx in range(0, len(items), size):
+        yield items[idx:idx + size]
+
+def _fetch_contact_status_history_map(contact_ids, headers):
+    """Fetch lead-status history in safe HubSpot-sized batches."""
+    history_by_id = {}
+    if not contact_ids:
+        return history_by_id
+
+    def fetch_batch(batch_ids):
+        batch_history = {}
+        body = {
+            "inputs": [{"id": contact_id} for contact_id in batch_ids],
+            "propertiesWithHistory": ["hs_lead_status", "lead_status"]
         }
-    
-    # Total metrics from CONTACTS
-    total_leads = len(df_contacts)
-    
-    # Lead status breakdown from CONTACTS
-    status_counts = df_contacts['Lead Status'].value_counts()
-    
-    cold = status_counts.get('Cold', 0)
-    warm = status_counts.get('Warm', 0)
-    hot = status_counts.get('Hot', 0)
-    new_lead = status_counts.get('New Lead', 0)
-    not_connected = status_counts.get('Not Connected (NC)', 0)
-    not_interested = status_counts.get('Not Interested', 0)
-    not_qualified = status_counts.get('Not Qualified', 0)
-    duplicate = status_counts.get('Duplicate', 0)
-    qualified_lead = status_counts.get('Qualified Lead', 0)
-    
-    # [OK] NEW: Calculate Qualified Lead Revenue (from contacts)
-    qualified_lead_revenue = df_contacts[df_contacts['Lead Status'] == 'Qualified Lead']['Amount'].sum()
-    
-    upselling = status_counts.get('Upselling', 0)
-    course_shifting = status_counts.get('Course Shifting', 0)
-    closed_lost = status_counts.get('Closed Lost', 0)
-    
-    # [OK] Check for any "Customer" in leads (should be 0)
-    customer_in_leads = status_counts.get('Customer', 0)
-    
-    # CUSTOMER metrics from DEALS
-    if df_customers is not None and not df_customers.empty:
-        customer = len(df_customers)
-        total_revenue = df_customers['Amount'].sum()
-        avg_revenue_per_customer = round((total_revenue / customer), 0) if customer > 0 else 0
-    else:
-        customer = 0
-        total_revenue = 0
-        avg_revenue_per_customer = 0
-    
-    # Deal Leads = Hot + Warm + Cold + Customer
-    deal_leads = hot + warm + cold + customer
-    
-    # Conversion metrics
-    lead_to_customer_pct = round((customer / total_leads * 100), 1) if total_leads > 0 else 0
-    lead_to_deal_pct = round((deal_leads / total_leads * 100), 1) if total_leads > 0 else 0
-    deal_to_customer_pct = round((customer / deal_leads * 100), 1) if deal_leads > 0 else 0
-    
-    # Top performing metrics
-    top_course = ""
-    top_owner = ""
-    top_revenue_course = ""
-    top_revenue_amount = 0
-    
-    if 'Course/Program' in df_contacts.columns:
-        course_counts = df_contacts['Course/Program'].value_counts()
-        if not course_counts.empty:
-            top_course = str(course_counts.index[0])
-            top_course_count = course_counts.iloc[0]
-    
-    if 'Course Owner' in df_contacts.columns:
-        owner_counts = df_contacts['Course Owner'].value_counts()
-        if not owner_counts.empty:
-            top_owner = str(owner_counts.index[0])
-            top_owner_count = owner_counts.iloc[0]
-    
-    # Best Revenue Course
-    if df_customers is not None and not df_customers.empty and 'Course/Program' in df_customers.columns:
-        revenue_by_course = df_customers.groupby('Course/Program')['Amount'].sum()
-        if not revenue_by_course.empty:
-            top_revenue_course = str(revenue_by_course.index[0])
-            top_revenue_amount = revenue_by_course.iloc[0]
-    
-    # Drop-off ratio
-    # Drop-off ratio
-    dropoff_ratio = round((not_interested + not_qualified + not_connected + closed_lost) / total_leads * 100, 1) if total_leads > 0 else 0
-    
+        try:
+            resp = hubspot_api_request("POST", batch_url, headers=headers, json=body, timeout=25)
+            if resp.status_code != 200:
+                logger.warning(f"Contact history batch failed ({resp.status_code}): {resp.text[:300]}")
+                return batch_history
+            for result in resp.json().get("results", []):
+                batch_history[str(result.get("id"))] = result.get("propertiesWithHistory", {})
+        except Exception as e:
+            logger.warning(f"Failed to load contact status history batch: {e}")
+        return batch_history
+
+    batch_url = "https://api.hubspot.com/crm/v3/objects/contacts/batch/read"
+    batches = list(_chunked(list(contact_ids), 50))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(fetch_batch, batch_ids) for batch_ids in batches]
+        for future in concurrent.futures.as_completed(futures):
+            history_by_id.update(future.result())
+    return history_by_id
+
+@cache.memoize(timeout=300)
+def get_hubspot_contact_status_histories(contact_ids):
+    """Fetch HubSpot lead-status history only for contacts that need a historical cutoff lookup."""
+    if not contact_ids:
+        return {}
+
+    token = get_hubspot_token()
+    if not token:
+        return {}
+
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    unique_ids = [str(contact_id) for contact_id in dict.fromkeys(contact_ids) if contact_id]
+    return _fetch_contact_status_history_map(unique_ids, headers)
+
+def _get_contact_status_as_of(contact, end_date, properties_with_history=None):
+    """Return the last known lead status on or before the snapshot cutoff."""
+    history = properties_with_history or contact.get("propertiesWithHistory", {})
+    ist = pytz.timezone('Asia/Kolkata')
+    cutoff_local = ist.localize(datetime.combine(end_date, datetime.max.time()))
+    cutoff_utc = cutoff_local.astimezone(pytz.UTC)
+
+    for prop_name in ("hs_lead_status", "lead_status"):
+        history_entries = history.get(prop_name, [])
+        valid_entries = []
+        for entry in history_entries:
+            ts = _parse_hubspot_datetime(entry.get("timestamp"))
+            value = entry.get("value")
+            if ts and value not in (None, "") and ts <= cutoff_utc:
+                valid_entries.append((ts, value))
+        if valid_entries:
+            valid_entries.sort(key=lambda item: item[0], reverse=True)
+            return valid_entries[0][1]
+
+    props = contact.get("properties", {})
+    return props.get("hs_lead_status") or props.get("lead_status") or ""
+
+@cache.memoize(timeout=300)
+def get_hubspot_lead_contacts(start_date, end_date):
+    """Fetch raw HubSpot contacts once so multiple lead views can share the same snapshot."""
+    token = get_hubspot_token()
+    if not token:
+        return []
+
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    ist = pytz.timezone('Asia/Kolkata')
+    dt_start_ist = ist.localize(datetime.combine(start_date, datetime.min.time()))
+    start_ts = int(dt_start_ist.astimezone(pytz.UTC).timestamp() * 1000)
+    dt_end_ist = ist.localize(datetime.combine(end_date, datetime.max.time()))
+    end_ts = int(dt_end_ist.astimezone(pytz.UTC).timestamp() * 1000)
+    owner_map = fetch_hubspot_owners()
+
+    contacts_url = "https://api.hubspot.com/crm/v3/objects/contacts/search"
+    contacts_body = {
+        "filterGroups": [{
+            "filters": [
+                {"propertyName": "createdate", "operator": "BETWEEN", "value": start_ts, "highValue": end_ts}
+            ]
+        }],
+        "properties": ["hs_lead_status", "lead_status", "createdate", "closedate", "lastmodifieddate", "hubspot_owner_id", "hs_assigned_owner_id"] + LEAD_CONTACT_COURSE_FIELDS,
+        "limit": 100
+    }
+    all_contacts = _fetch_all_results_paginated(contacts_url, headers, contacts_body)
+    return [
+        contact for contact in all_contacts
+        if not _is_excluded_owner_id(_resolve_contact_owner_id(contact), owner_map)
+    ]
+
+def _build_hubspot_lead_snapshot(all_contacts, start_date, end_date, course_filter=None, include_status_metrics=True):
+    """Convert raw HubSpot contacts into lead KPIs, trend data, and deal-status split."""
+    ist = pytz.timezone('Asia/Kolkata')
+    cutoff_local = ist.localize(datetime.combine(end_date, datetime.max.time()))
+    cutoff_utc = cutoff_local.astimezone(pytz.UTC)
+    total_leads = 0
+    deal_leads = 0
+    daily_trend = {}
+    course_counts = {}
+    deal_status_breakdown = {"Hot": 0, "Warm": 0, "Cold": 0, "Other": 0}
+    relevant_contacts = []
+    history_candidate_ids = []
+
+    for contact in all_contacts:
+        props = contact.get('properties', {})
+        created_dt = _parse_hubspot_datetime(props.get('createdate'))
+        if not created_dt:
+            continue
+
+        created_local = created_dt.astimezone(ist).date()
+        if not (start_date <= created_local <= end_date):
+            continue
+
+        contact_course = "Other"
+        for field in LEAD_CONTACT_COURSE_FIELDS:
+            val = props.get(field)
+            if val:
+                contact_course = get_main_course(str(val))
+                break
+
+        if course_filter:
+            match = False
+            for field in LEAD_CONTACT_COURSE_FIELDS:
+                val = props.get(field, "")
+                if val and get_main_course(str(val)).lower() == course_filter.lower():
+                    match = True
+                    break
+            if not match:
+                continue
+
+        relevant_contacts.append((contact, props, created_local, contact_course))
+        if include_status_metrics:
+            updated_dt = _parse_hubspot_datetime(contact.get("updatedAt") or props.get("lastmodifieddate"))
+            if updated_dt and updated_dt > cutoff_utc and contact.get("id"):
+                history_candidate_ids.append(str(contact.get("id")))
+
+    status_history_map = {}
+    if include_status_metrics and history_candidate_ids:
+        status_history_map = get_hubspot_contact_status_histories(tuple(dict.fromkeys(history_candidate_ids)))
+
+    for contact, props, created_local, contact_course in relevant_contacts:
+        raw_status = props.get('hs_lead_status', '')
+        status = "Unknown"
+        if include_status_metrics:
+            raw_status = _get_contact_status_as_of(
+                contact,
+                end_date,
+                status_history_map.get(str(contact.get("id")))
+            )
+            close_date = props.get('closedate')
+            status = normalize_lead_status(raw_status, close_date, start_date, end_date)
+
+        total_leads += 1
+        if contact_course not in course_counts:
+            course_counts[contact_course] = {"total": 0, "deal": 0}
+        course_counts[contact_course]["total"] += 1
+
+        if include_status_metrics and status not in LEAD_EXCLUSION_STATUSES:
+            deal_leads += 1
+            course_counts[contact_course]["deal"] += 1
+            if status in deal_status_breakdown:
+                deal_status_breakdown[status] += 1
+            else:
+                deal_status_breakdown["Other"] += 1
+
+        date_str = created_local.strftime('%Y-%m-%d')
+        daily_trend[date_str] = daily_trend.get(date_str, 0) + 1
+
+    course_breakdown = [
+        {"course": k, "total": v["total"], "deal": v["deal"]}
+        for k, v in sorted(course_counts.items(), key=lambda x: x[1]["total"], reverse=True)
+    ]
+
+    sorted_trend = []
+    curr = start_date
+    while curr <= end_date:
+        ds = curr.strftime('%Y-%m-%d')
+        sorted_trend.append({"Date": ds, "Admissions": daily_trend.get(ds, 0)})
+        curr += timedelta(days=1)
+
     return {
-        'total_leads': total_leads,
-        'deal_leads': deal_leads,
-        'cold': cold,
-        'warm': warm,
-        'hot': hot,
-        'customer': customer,  # FROM DEALS ONLY
-        'customer_in_leads': customer_in_leads,  # This should be 0!
-        'new_lead': new_lead,
-        'not_connected': not_connected,
-        'not_interested': not_interested,
-        'not_qualified': not_qualified,
-        'duplicate': duplicate,
-        'qualified_lead': qualified_lead,
-        'qualified_lead_revenue': qualified_lead_revenue,
-        'upselling': upselling,
-        'course_shifting': course_shifting,
-        'closed_lost': closed_lost,
-        'lead_to_customer_pct': lead_to_customer_pct,
-        'lead_to_deal_pct': lead_to_deal_pct,
-        'deal_to_customer_pct': deal_to_customer_pct,
-        'total_revenue': total_revenue,
-        'avg_revenue_per_customer': avg_revenue_per_customer,
-        'top_course': top_course[:20] if top_course else "N/A",
-        'top_owner': top_owner[:20] if top_owner else "N/A",
-        'top_revenue_course': top_revenue_course[:20] if top_revenue_course else "N/A",
-        'top_revenue_amount': top_revenue_amount,
-        'dropoff_ratio': dropoff_ratio
+        "total_leads": total_leads,
+        "deal_leads": deal_leads,
+        "customer_count": 0,
+        "course_breakdown": course_breakdown,
+        "trend": sorted_trend,
+        "deal_status_breakdown": deal_status_breakdown
     }
 
-def main():
-    # [OK] SECURITY: Get API key from secrets
-    api_key = get_api_key()
-    
-    if not api_key:
-        st.error("##  API Key Required")
-        return
-    
-    # Header
-    st.markdown(
-        """
-        <div class="header-container">
-            <h1 style="margin: 0; font-size: 2.5rem;"> HubSpot Business Performance Dashboard</h1>
-            <p style="margin: 0.5rem 0 0 0; font-size: 1.2rem; opacity: 0.9;"> Total Leads Count Includes "Customer" Status Contacts</p>
-            <p style="margin: 0.5rem 0 0 0; font-size: 1rem; opacity: 0.8;">Customers ONLY from Deals | Leads NEVER contain "Customer"</p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-    
-    # [OK] CRITICAL FIX WARNING
-    st.markdown("""
-    <div class="warning-card">
-        <strong> NOTE:</strong><br>
-         Leads with status "Customer" are now included as <strong>"Qualified Lead"</strong> in the total count.<br>
-         This matches HubSpot's total contact count.
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Initialize session state
-    if 'contacts_df' not in st.session_state:
-        st.session_state.contacts_df = None
-    if 'customers_df' not in st.session_state:
-        st.session_state.customers_df = None
-    if 'owner_mapping' not in st.session_state:
-        st.session_state.owner_mapping = None
-    if 'metrics' not in st.session_state:
-        st.session_state.metrics = {}
-    if 'date_filter' not in st.session_state:
-        st.session_state.date_filter = None
-    if 'date_range' not in st.session_state:
-        st.session_state.date_range = None
-    if 'deal_stages' not in st.session_state:
-        st.session_state.deal_stages = None
-    if 'customer_stage_ids' not in st.session_state:
-        st.session_state.customer_stage_ids = []
-    if 'revenue_data' not in st.session_state:
-        st.session_state.revenue_data = None
-    if 'matrix_data' not in st.session_state:
-        st.session_state.matrix_data = None
-    if 'team_performance_df' not in st.session_state:
-        st.session_state.team_performance_df = None
-    
-    # [OK] Fetch Deal Pipeline Stages FIRST
-    if 'deal_stages' not in st.session_state or st.session_state.deal_stages is None:
-        with st.spinner(" Loading deal pipeline stages..."):
-            deal_stages = fetch_deal_pipeline_stages(api_key)
-            st.session_state.deal_stages = deal_stages
-    
-    # Create sidebar
-    with st.sidebar:
-        st.markdown("##  Configuration")
-        
-        # [OK] Deal Stage Configuration
-        st.markdown("###  Customer Deal Stage Configuration")
-        
-        if st.session_state.deal_stages:
-            all_stages = st.session_state.deal_stages
-            detected_stages = detect_admission_confirmed_stage(all_stages)
-            
-            if detected_stages:
-                # Silent auto-detection
-                
-                # Reset customer stage IDs
-                st.session_state.customer_stage_ids = []
-                
-                # Default Logic (Silent)
-                for stage in detected_stages:
-                     if stage['stage_id'] not in st.session_state.customer_stage_ids:
-                        st.session_state.customer_stage_ids.append(stage['stage_id'])
+@cache.memoize(timeout=300)
+def get_hubspot_customer_count(start_date, end_date, course_filter=None):
+    """Count admissions/customers from won deals for LEAD KPI alignment."""
+    token = get_hubspot_token()
+    if not token:
+        return 0
 
-                # Hidden configuration details
-                with st.expander("Advanced Configuration", expanded=False):
-                    st.info(f"Auto-detected {len(detected_stages)} customer stage(s)")
-                    
-                    # Allow overriding
-                    # Re-build based on UI only if user interacts, but initially we want the defaults.
-                    # Actually, for the checkboxes to work, we relying on session_state persistence.
-                    # We can cleaner logic here:
-                    
-                    temp_selected_ids = []
-                    
-                    for idx, stage in enumerate(detected_stages):
-                        st.write(f"**Stage:** {stage['stage_label']} (`{stage['stage_id']}`)")
-                        # Default value is True, so this will be checked.
-                        if st.checkbox(f"Use as customer stage", value=True, key=f"use_stage_{stage['stage_id']}"):
-                             temp_selected_ids.append(stage['stage_id'])
-                    
-                    st.divider()
-                    
-                    # Manual stage selection
-                    st.markdown("#### Manual Selection")
-                    
-                    all_stage_options = []
-                    for stage_id, stage_info in all_stages.items():
-                        label = stage_info.get("stage_label", "Unknown")
-                        pipeline = stage_info.get("pipeline_label", "Unknown")
-                        all_stage_options.append({
-                            "id": stage_id,
-                            "display": f"{label} ({pipeline})"
-                        })
-                    
-                    all_stage_options.sort(key=lambda x: x["display"])
-                    
-                    selected_manual_stages = st.multiselect(
-                        "Add additional stages:",
-                        options=[s["display"] for s in all_stage_options],
-                        default=[]
-                    )
-                    
-                    # Map back to IDs
-                    manual_stage_ids = []
-                    for display in selected_manual_stages:
-                        for stage in all_stage_options:
-                            if stage["display"] == display:
-                                manual_stage_ids.append(stage["id"])
-                                break
-                    
-                    # Combine
-                    all_selected_ids = list(set(temp_selected_ids + manual_stage_ids))
-                    st.session_state.customer_stage_ids = all_selected_ids
-                    
-                    if all_selected_ids:
-                        global CUSTOMER_DEAL_STAGES
-                        CUSTOMER_DEAL_STAGES = all_selected_ids
-                        st.success(f"Configured {len(CUSTOMER_DEAL_STAGES)} stages")
-                    else:
-                         st.warning("No customer stages selected")
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    owner_map = fetch_hubspot_owners()
+    ist = pytz.timezone('Asia/Kolkata')
+    dt_start_ist = ist.localize(datetime.combine(start_date, datetime.min.time()))
+    start_ts = int(dt_start_ist.astimezone(pytz.UTC).timestamp() * 1000)
+    dt_end_ist = ist.localize(datetime.combine(end_date, datetime.max.time()))
+    end_ts = int(dt_end_ist.astimezone(pytz.UTC).timestamp() * 1000)
 
-            else:
-                 st.error("No customer stages auto-detected. Please configure manually.")
-        
-        st.divider()
+    deals_url = "https://api.hubspot.com/crm/v3/objects/deals/search"
+    customer_stages = ["closedwon", "1884422889", "2208152296", "1955461874", "1955461879", "contractsent"]
+    deals_body = {
+        "filterGroups": [{
+            "filters": [
+                {"propertyName": "dealstage", "operator": "IN", "values": customer_stages},
+                {"propertyName": "closedate", "operator": "BETWEEN", "value": start_ts, "highValue": end_ts}
+            ]
+        }],
+        "properties": ["closedate", "hubspot_owner_id"] + LEAD_DEAL_COURSE_FIELDS,
+        "limit": 100
+    }
 
-        
-        # Date Range
-        st.markdown("##  Date Range Filter")
-        
-        date_field = st.selectbox(
-            "Select date field for LEADS:",
-            ["Created Date", "Last Modified Date", "Both"]
-        )
-        
-        default_end = datetime.now(IST).date()
-        default_start = default_end - timedelta(days=30)
-        
-        start_date = st.date_input("Start date", value=default_start)
-        end_date = st.date_input("End date", value=default_end)
-        
-        if start_date > end_date:
-            st.error("Start date must be before end date!")
-            return
-        
-        st.divider()
-        
-        # Quick Actions
-        st.markdown("##  Quick Actions")
-        
-        fetch_disabled = not CUSTOMER_DEAL_STAGES
-        
-        if st.button(" Fetch ALL Data", 
-                    type="primary", 
-                    use_container_width=True,
-                    disabled=fetch_disabled):
-            
-            if not CUSTOMER_DEAL_STAGES:
-                st.error(" Please configure customer deal stages first")
-                return
-                
-            if start_date > end_date:
-                st.error("Start date must be before end date.")
-            else:
-                # Add explicit cache clearing option
-                if st.button(" Clear Cache & Refresh", type="secondary", use_container_width=True):
-                    st.cache_data.clear()
-                    st.rerun()
+    all_deals = _fetch_all_results_paginated(deals_url, headers, deals_body)
+    all_deals = [
+        deal for deal in all_deals
+        if not _is_excluded_owner_id(deal.get("properties", {}).get("hubspot_owner_id", ""), owner_map)
+    ]
+    if not course_filter:
+        return len(all_deals)
 
-                with st.spinner("Fetching data..."):
-                    is_valid, message = test_hubspot_connection(api_key)
-                    
-                    if is_valid:
-                        # Store date filter info
-                        st.session_state.date_filter = date_field
-                        st.session_state.date_range = (start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
-                        
-                        # Fetch owners
-                        owner_mapping = fetch_owner_mapping(api_key)
-                        st.session_state.owner_mapping = owner_mapping
-                        
-                        # Fetch CONTACTS (Leads)
-                        contacts, total_contacts = fetch_hubspot_contacts_with_date_filter(
-                            api_key, date_field, start_date, end_date
-                        )
-                        
-                        # [OK] Fetch DEALS using Stage IDs
-                        deals, total_deals = fetch_hubspot_deals(
-                            api_key, start_date, end_date, CUSTOMER_DEAL_STAGES
-                        )
-                        
-                        # [OK] NEW: Fetch Team Performance Deals (Date Entered Logic)
-                        stage_ids_map = detect_key_stages(st.session_state.deal_stages)
-                        team_perf_deals, count_tp = fetch_team_performance_deals(
-                            api_key, start_date, end_date, stage_ids_map
-                        )
-                        
-                        if contacts:
-                            # Process contacts (leads) - Passing dates for Qualified Lead intersection check
-                            df_contacts = process_contacts_data(contacts, owner_mapping, api_key, start_date=start_date, end_date=end_date)
-                            st.session_state.contacts_df = df_contacts
-                            
-                            # Process deals (customers)
-                            df_customers = process_deals_as_customers(deals, owner_mapping, api_key, st.session_state.deal_stages, start_date=start_date)
-                            
-                            # [OK] FILTER OUT EXCLUDED OWNERS
-                            if df_contacts is not None and not df_contacts.empty:
-                                df_contacts = df_contacts[~df_contacts['Course Owner'].isin(EXCLUDED_OWNERS)]
-                                
-                            if df_customers is not None and not df_customers.empty:
-                                df_customers = df_customers[~df_customers['Course Owner'].isin(EXCLUDED_OWNERS)]
-                            
-                            st.session_state.contacts_df = df_contacts
-                            st.session_state.customers_df = df_customers
-                            
-                            # Calculate metrics - ADD NEW METRIC 6
-                            metric_4_data = create_metric_4(df_contacts, df_customers)
-                            
-                            # [OK] NEW: Process Team Performance Metrics
-                            stage_ids_map = detect_key_stages(st.session_state.deal_stages)
-                            df_team_perf = process_team_performance_metrics(team_perf_deals, start_date, end_date, stage_ids_map, owner_mapping)
-                            
-                            # [OK] NEW: Merge Customer Count/Revenue from metric_4 (Sales Performance)
-                            if not metric_4_data.empty:
-                                cust_data = metric_4_data[['Course Owner', 'Customer', 'Customer_Revenue']].copy()
-                                cust_data = cust_data.rename(columns={'Customer': 'Customer Count', 'Customer_Revenue': 'Customer Revenue'})
-                                
-                                # Merge
-                                df_team_perf = pd.merge(df_team_perf, cust_data, on='Course Owner', how='left')
-                                df_team_perf['Customer Count'] = df_team_perf['Customer Count'].fillna(0)
-                                df_team_perf['Customer Revenue'] = df_team_perf['Customer Revenue'].fillna(0)
+    filtered_count = 0
+    for deal in all_deals:
+        props = deal.get("properties", {})
+        for field in LEAD_DEAL_COURSE_FIELDS:
+            val = props.get(field, "")
+            if val and get_main_course(str(val)).lower() == course_filter.lower():
+                filtered_count += 1
+                break
+    return filtered_count
 
-                            st.session_state.team_performance_df = df_team_perf
-
-                            st.session_state.metrics = {
-                                'metric_1': create_metric_1(df_contacts),
-                                'metric_2': create_metric_2(df_contacts),
-                                'metric_4': metric_4_data,
-                                'metric_5': create_metric_5(df_contacts, df_customers),
-                                'metric_6': create_metric_6(df_contacts),  # [OK] NEW LEAD STATUS METRIC
-                                'metric_7': group_team_performance_metrics(df_team_perf) # [OK] NEW TEAM METRIC DICT
-                            }
-                            
-                            # [OK] NEW: Calculate revenue data
-                            st.session_state.revenue_data = create_course_revenue(df_customers)
-                            
-                            # [OK] NEW: Calculate matrix data
-                            st.session_state.matrix_data = create_volume_conversion_matrix(
-                                st.session_state.metrics['metric_1'], df_contacts, df_customers
-                            )
-                            
-                            st.success(f"""
-                            [OK] Successfully loaded:
-                              {len(contacts)} contacts (leads)
-                              {len(deals)} customers (from deals)
-                            """)
-                            st.rerun()
-                        else:
-                            st.warning("No contacts found")
-                    else:
-                        st.error(f"Connection failed: {message}")
-        
-        if st.button(" Refresh Analysis", use_container_width=True, 
-                    disabled=st.session_state.contacts_df is None):
-            if st.session_state.contacts_df is not None:
-                # [OK] RE-FILTER just in case
-                df_contacts = st.session_state.contacts_df
-                df_contacts = df_contacts[~df_contacts['Course Owner'].isin(EXCLUDED_OWNERS)]
-                
-                df_customers = st.session_state.customers_df
-                df_customers = df_customers[~df_customers['Course Owner'].isin(EXCLUDED_OWNERS)]
-
-                
-                metric_4_data = create_metric_4(df_contacts, df_customers)
-                
-                st.session_state.metrics = {
-                    'metric_1': create_metric_1(df_contacts),
-                    'metric_2': create_metric_2(df_contacts),
-                    'metric_4': metric_4_data,
-                    'metric_5': create_metric_5(df_contacts, df_customers),
-                    'metric_6': create_metric_6(df_contacts),  # [OK] NEW METRIC
-                    'metric_7': group_team_performance_metrics(st.session_state.team_performance_df) if st.session_state.team_performance_df is not None else {}
-                }
-                
-                # [OK] NEW: Refresh revenue data
-                st.session_state.revenue_data = create_course_revenue(df_customers)
-                
-                # [OK] NEW: Refresh matrix data
-                st.session_state.matrix_data = create_volume_conversion_matrix(
-                    st.session_state.metrics['metric_1'], df_contacts, df_customers
-                )
-                
-                st.success("Analysis refreshed!")
-                st.rerun()
-        
-        if st.button("--' Clear All Data", use_container_width=True):
-            st.session_state.clear()
-            st.rerun()
-            
-        st.divider()
-        
-        st.markdown("###  Dashboard Logic")
-        st.info("""
-        ** GUARANTEED DATA PURITY:**
-        
-        1 **Leads (Contacts):**
-         NEVER contain "Customer" status
-         Customer keywords -> "Qualified Lead"
-         Clean pipeline stages only
-        
-        2 **Customers (Deals):**
-         ONLY from Deals API
-         Filtered by Stage IDs
-         Revenue from deal amounts
-        
-        **[OK] 100% ACCURATE SEPARATION**
-        
-        ** COURSE CLASSIFICATION:**
-          Star: High volume + High conversion
-          Potential: Low volume + High conversion  
-          Burn: High volume + Low conversion
-          Weak: Low volume + Low conversion
-        """)
-
-    # Main content area
-    if st.session_state.contacts_df is not None and not st.session_state.contacts_df.empty:
-        df_contacts = st.session_state.contacts_df.copy()
-        df_customers = st.session_state.customers_df.copy() if st.session_state.customers_df is not None else None
-        
-        # [OK] NEW: Global Owner Exclusion to match Owner Dashboard Totals (5426 -> 5422)
-        global_excluded_owners = ['Aneesha S', 'Sonia William']
-        df_contacts = df_contacts[~df_contacts['Course Owner'].isin(global_excluded_owners)]
-        if df_customers is not None and not df_customers.empty:
-            df_customers = df_customers[~df_customers['Course Owner'].isin(global_excluded_owners)]
-            
-        metrics = st.session_state.metrics
-        revenue_data = st.session_state.revenue_data
-        matrix_data = st.session_state.matrix_data
-
-        # [OK] Data Validation FIRST
-        st.markdown("### [OK] Data Validation Check")
-        
-        # Check for "Customer" in leads
-        customer_in_leads = (df_contacts['Lead Status'] == 'Customer').sum()
-        
-        if customer_in_leads > 0:
-            st.error(f" CRITICAL ERROR: Found {customer_in_leads} 'Customer' entries in leads!")
-            
-            # Show what's causing this
-            st.write("**Raw values being incorrectly marked as 'Customer':**")
-            customer_rows = df_contacts[df_contacts['Lead Status'] == 'Customer']
-            unique_raw = customer_rows['Lead Status Raw'].dropna().unique()
-            
-            for raw_val in unique_raw[:5]:
-                st.write(f"- `{raw_val}` -> Customer")
-            
-            # Auto-fix option
-            if st.button(" Auto-fix: Convert 'Customer' to 'Qualified Lead'"):
-                df_contacts_fixed = df_contacts.copy()
-                df_contacts_fixed['Lead Status'] = df_contacts_fixed['Lead Status'].replace('Customer', 'Qualified Lead')
-                st.session_state.contacts_df = df_contacts_fixed
-                st.success("[OK] Fixed! 'Customer' entries converted to 'Qualified Lead'")
-                st.rerun()
-            
-            st.divider()
-        else:
-            st.success("[OK] PERFECT: 0 'Customer' entries in lead data")
-        
-        # [OK] NEW: Enhanced Download Section at the Top
-        st.markdown('<div class="section-header"><h2> Download Center</h2></div>', unsafe_allow_html=True)
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            # Download Raw Data
-            csv_raw = df_contacts.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label=" Download Raw Data (CSV)",
-                data=csv_raw,
-                file_name=f"hubspot_raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                use_container_width=True,
-                help="All contact records with complete details"
-            )
-        
-        with col2:
-            # Download Course KPI Dashboard (NEW)
-            if 'metric_5' in metrics and not metrics['metric_5'].empty:
-                csv_course_kpi = metrics['metric_5'].to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label=" Download Course KPI Dashboard (CSV)",
-                    data=csv_course_kpi,
-                    file_name=f"hubspot_course_kpi_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    help="Course performance metrics with conversion rates"
-                )
-        
-        with col3:
-            # Premium Excel Report Button
-            if st.button(" Generate Premium Excel Report", use_container_width=True, type="primary"):
-                with st.spinner(" Creating premium Excel report with formatting..."):
-                    try:
-                        kpis = calculate_kpis(df_contacts, df_customers)
-                        excel_data = create_excel_report(
-                            df_contacts, 
-                            df_customers,
-                            metrics, 
-                            kpis, 
-                            st.session_state.date_range,
-                            st.session_state.date_filter
-                        )
-                        
-                        st.download_button(
-                            label=" Download Premium Excel Report",
-                            data=excel_data,
-                            file_name=f"HubSpot_Premium_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True
-                        )
-                        st.success("[OK] Premium Excel report ready for download!")
-                    except Exception as e:
-                        st.error(f" Error: {str(e)}")
-        
-        st.divider()
-        
-        # [OK] NEW: Global Filters at the top
-        st.markdown("###  Global Filters")
-        filter_col1, filter_col2, filter_col3 = st.columns(3)
-        
-        with filter_col1:
-            # Course filter
-            courses = df_contacts['Course/Program'].dropna().unique()
-            courses = [str(c).strip() for c in courses if str(c).strip() != '']
-            selected_courses = st.multiselect(
-                "Filter by Course:",
-                options=courses[:50] if len(courses) > 50 else courses,
-                default=[],
-                help="Select courses to filter all views"
-            )
-        
-        with filter_col2:
-            # Owner filter
-            owners = df_contacts['Course Owner'].dropna().unique()
-            owners = [str(o).strip() for o in owners if str(o).strip() != '']
-            selected_owners = st.multiselect(
-                "Filter by Owner:",
-                options=owners[:50] if len(owners) > 50 else owners,
-                default=[],
-                help="Select owners to filter all views"
-            )
-        
-        with filter_col3:
-            # Lead Status filter
-            lead_statuses = df_contacts['Lead Status'].dropna().unique()
-            lead_statuses = [str(s).strip() for s in lead_statuses if str(s).strip() != '']
-            selected_statuses = st.multiselect(
-                "Filter by Lead Status:",
-                options=lead_statuses,
-                default=[],
-                help="Select lead statuses to filter all views"
-            )
-        
-        # Apply filters
-        filtered_df = df_contacts.copy()
-        filtered_customers = df_customers.copy() if df_customers is not None else None
-        
-        if selected_courses:
-            filtered_df = filtered_df[filtered_df['Course/Program'].isin(selected_courses)]
-            if filtered_customers is not None and not filtered_customers.empty:
-                filtered_customers = filtered_customers[filtered_customers['Course/Program'].isin(selected_courses)]
-        
-        if selected_owners:
-            filtered_df = filtered_df[filtered_df['Course Owner'].isin(selected_owners)]
-            if filtered_customers is not None and not filtered_customers.empty:
-                filtered_customers = filtered_customers[filtered_customers['Course Owner'].isin(selected_owners)]
-        
-        if selected_statuses:
-            filtered_df = filtered_df[filtered_df['Lead Status'].isin(selected_statuses)]
-            # Note: Customers don't have "Lead Status" in the same way, they are already customers.
-            # However, if we filter leads by status, we don't necessarily want to filter customers 
-            # unless the user specifically wants to see cohorts. 
-            # For now, we only filter leads by status as requested by the UI labels.
-        
-        # Update metrics with filtered data
-        filtered_metrics = {
-            'metric_1': create_metric_1(filtered_df),
-            'metric_2': create_metric_2(filtered_df),
-            'metric_4': create_metric_4(filtered_df, filtered_customers),
-            'metric_5': create_metric_5(filtered_df, filtered_customers),
-            'metric_6': create_metric_6(filtered_df)
+@cache.memoize(timeout=300)
+def get_hubspot_leads(start_date, end_date, course_filter=None, include_customer_count=False):
+    """
+    Fetch and calibrate Total Leads and Deal Leads.
+    Now includes concurrency for performance and course filtering.
+    """
+    token = get_hubspot_token()
+    if not token:
+        return {
+            "total_leads": 0,
+            "deal_leads": 0,
+            "customer_count": 0,
+            "trend": [],
+            "deal_status_breakdown": {"Hot": 0, "Warm": 0, "Cold": 0, "Other": 0}
         }
-        # [OK] NEW: Use Team Performance DF (Separate Fetch) for Metric 7
-        if st.session_state.team_performance_df is not None and not st.session_state.team_performance_df.empty:
-            temp_team_df = st.session_state.team_performance_df.copy()
-            
-            # Apply global exclusion here as well to ensure total consistency across identical structures
-            global_excluded_owners = ['Aneesha S', 'Sonia William']
-            temp_team_df = temp_team_df[~temp_team_df['Course Owner'].isin(global_excluded_owners)]
-            
-            if selected_owners:
-                temp_team_df = temp_team_df[temp_team_df['Course Owner'].isin(selected_owners)]
-            
-            # Group into teams
-            team_metrics = group_team_performance_metrics(temp_team_df)
-            
-            # [OK] INJECT CUSTOMER COUNTS (Requested "Previous Logic")
-            # Calculate customer counts per owner from the filtered_customers dataframe
-            owner_customer_counts = {}
-            if filtered_customers is not None and not filtered_customers.empty:
-                owner_customer_counts = filtered_customers['Course Owner'].value_counts().to_dict()
-            
-            # Update each team dataframe with Customer counts
-            for team_name, team_df in team_metrics.items():
-                # Map customer counts
-                team_df['Customer Count'] = team_df['Course Owner'].map(owner_customer_counts).fillna(0).astype(int)
-                
-                # Update TOTAL row
-                if 'TOTAL' in team_df['Course Owner'].values:
-                    total_idx = team_df.index[team_df['Course Owner'] == 'TOTAL'].tolist()[0]
-                    # Sum usage of Customer Count column excluding the TOTAL row itself
-                    customer_sum = team_df.loc[team_df['Course Owner'] != 'TOTAL', 'Customer Count'].sum()
-                    team_df.at[total_idx, 'Customer Count'] = customer_sum
 
-                # Reorder columns to put Customer Count after Cold
-                cols = team_df.columns.tolist()
-                if 'Cold' in cols and 'Customer Count' in cols:
-                    cols.remove('Customer Count')
-                    cold_idx = cols.index('Cold')
-                    cols.insert(cold_idx + 1, 'Customer Count')
-                    team_metrics[team_name] = team_df[cols]
-            
-            filtered_metrics['metric_7'] = team_metrics
+    all_contacts = get_hubspot_lead_contacts(start_date, end_date)
+    result = _build_hubspot_lead_snapshot(all_contacts, start_date, end_date, course_filter)
+
+    if include_customer_count:
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        ist = pytz.timezone('Asia/Kolkata')
+        dt_start_ist = ist.localize(datetime.combine(start_date, datetime.min.time()))
+        start_ts = int(dt_start_ist.astimezone(pytz.UTC).timestamp() * 1000)
+        dt_end_ist = ist.localize(datetime.combine(end_date, datetime.max.time()))
+        end_ts = int(dt_end_ist.astimezone(pytz.UTC).timestamp() * 1000)
+        deals_url = "https://api.hubspot.com/crm/v3/objects/deals/search"
+        customer_stages = ["closedwon", "1884422889", "2208152296", "1955461874", "1955461879"]
+        deals_filters = [
+            {"propertyName": "dealstage", "operator": "IN", "values": customer_stages},
+            {"propertyName": "closedate", "operator": "BETWEEN", "value": start_ts, "highValue": end_ts}
+        ]
+        deals_body = {
+            "filterGroups": [{"filters": deals_filters}],
+            "properties": ["amount", "closedate", "dealstage"] + LEAD_DEAL_COURSE_FIELDS,
+            "limit": 100
+        }
+        all_deals = _fetch_all_results_paginated(deals_url, headers, deals_body)
+        filtered_deals_count = 0
+        for deal in all_deals:
+            if course_filter:
+                match = False
+                props = deal.get('properties', {})
+                for field in LEAD_DEAL_COURSE_FIELDS:
+                    val = props.get(field, "")
+                    if val and get_main_course(str(val)).lower() == course_filter.lower():
+                        match = True
+                        break
+                if not match:
+                    continue
+            filtered_deals_count += 1
+        result["customer_count"] = filtered_deals_count
+
+    return result
+
+
+# ---------------- KAJABI ----------------
+KAJABI_CLIENT_ID = secrets.get("kajabi", {}).get("client_id")
+KAJABI_CLIENT_SECRET = secrets.get("kajabi", {}).get("client_secret")
+
+
+@cache.memoize(timeout=3500)
+def get_kajabi_token():
+    url = "https://api.kajabi.com/v1/oauth/token"
+    try:
+        response = requests.post(
+            url,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": KAJABI_CLIENT_ID,
+                "client_secret": KAJABI_CLIENT_SECRET
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=10
+        )
+        if response.status_code == 200:
+            return response.json().get('access_token')
+        return None
+    except Exception:
+        return None
+
+
+@cache.memoize(timeout=600)
+def get_kajabi_new_customers(target_month_start, target_month_end):
+    """
+    Fetch Kajabi customers created in the date range.
+    Returns (count, customer_list, total_global_count, daily_trend_list).
+    """
+    token = get_kajabi_token()
+    if not token:
+        return 0, [], 0, []
+
+    url = "https://api.kajabi.com/v1/customers"
+    headers = {"Authorization": f"Bearer {token}"}
+    ist = pytz.timezone('Asia/Kolkata')
+
+    dt_start_ist = ist.localize(datetime.combine(target_month_start, datetime.min.time()))
+    dt_end_ist = ist.localize(datetime.combine(target_month_end, datetime.max.time()))
+
+    all_customers = []
+    next_url = f"{url}?limit=100&include=offers"
+    page_count = 0
+    total_global = 0
+
+    while next_url and page_count < 50:
+        try:
+            resp = requests.get(next_url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            if page_count == 0:
+                total_global = data.get('meta', {}).get('total', 0)
+
+            batch = data.get('data', [])
+            if not batch:
+                break
+
+            should_stop = False
+            for c in batch:
+                attrs = c.get('attributes', {})
+                u_str = attrs.get('updated_at')
+                if u_str:
+                    try:
+                        u_date = datetime.fromisoformat(u_str.replace('Z', '+00:00')).astimezone(ist)
+                        if u_date < dt_start_ist:
+                            should_stop = True
+                    except Exception:
+                        pass
+
+                c_date_str = attrs.get('created_at')
+                if c_date_str:
+                    try:
+                        c_date = datetime.fromisoformat(c_date_str.replace('Z', '+00:00')).astimezone(ist)
+                        if dt_start_ist <= c_date <= dt_end_ist:
+                            all_customers.append(c)
+                    except Exception:
+                        pass
+
+            if should_stop:
+                break
+            next_url = data.get('links', {}).get('next')
+            page_count += 1
+        except Exception:
+            break
+
+    # Build daily trend
+    daily_counts = {}
+    for c in all_customers:
+        try:
+            c_date_str = c['attributes'].get('created_at')
+            if c_date_str:
+                c_date = datetime.fromisoformat(c_date_str.replace('Z', '+00:00')).astimezone(ist)
+                d_str = c_date.strftime('%Y-%m-%d')
+                daily_counts[d_str] = daily_counts.get(d_str, 0) + 1
+        except Exception:
+            continue
+
+    chart_end = _chart_end_date(dt_end_ist.date(), ist)
+    sorted_daily = []
+    curr = dt_start_ist.date()
+    while curr <= chart_end:
+        d_str = curr.strftime('%Y-%m-%d')
+        sorted_daily.append({"Date": d_str, "Count": daily_counts.get(d_str, 0)})
+        curr += timedelta(days=1)
+
+    return len(all_customers), all_customers, total_global, sorted_daily
+
+
+@cache.memoize(timeout=600)
+def get_kajabi_sales(target_month_start, target_month_end):
+    """Fetch Kajabi purchases and return (total_revenue, purchase_list)."""
+    token = get_kajabi_token()
+    if not token:
+        return 0.0, []
+
+    url = "https://api.kajabi.com/v1/purchases"
+    headers = {"Authorization": f"Bearer {token}"}
+    ist = pytz.timezone('Asia/Kolkata')
+
+    dt_start_ist = ist.localize(datetime.combine(target_month_start, datetime.min.time()))
+    dt_end_ist = ist.localize(datetime.combine(target_month_end, datetime.max.time()))
+
+    revenue = 0.0
+    filtered = []
+    next_url = f"{url}?limit=100"
+    page_count = 0
+
+    while next_url and page_count < 50:
+        try:
+            resp = requests.get(next_url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            batch = data.get('data', [])
+            if not batch:
+                break
+
+            should_stop = False
+            for p in batch:
+                attrs = p.get('attributes', {})
+                p_date_str = attrs.get('created_at')
+                if p_date_str:
+                    try:
+                        p_date = datetime.fromisoformat(p_date_str.replace('Z', '+00:00')).astimezone(ist)
+                        if p_date < dt_start_ist:
+                            should_stop = True
+                            continue
+                        if dt_start_ist <= p_date <= dt_end_ist:
+                            amt = float(attrs.get('amount_in_cents', 0) or 0) / 100
+                            revenue += amt
+                            filtered.append(p)
+                    except Exception:
+                        pass
+
+            if should_stop:
+                break
+            next_url = data.get('links', {}).get('next')
+            page_count += 1
+        except Exception:
+            break
+
+    return revenue, filtered
+
+
+@cache.memoize(timeout=3600)
+def get_kajabi_products():
+    """Fetch all Kajabi products with member counts."""
+    token = get_kajabi_token()
+    if not token:
+        return []
+    try:
+        url = "https://api.kajabi.com/v1/products"
+        headers = {"Authorization": f"Bearer {token}"}
+        all_products = []
+        next_url = f"{url}?limit=100"
+        while next_url:
+            resp = requests.get(next_url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            for prod in data.get('data', []):
+                attrs = prod.get('attributes', {})
+                all_products.append({
+                    "Name": attrs.get('title', 'Unknown'),
+                    "Members": attrs.get('members_aggregate_count', 0)
+                })
+            next_url = data.get('links', {}).get('next')
+        return all_products
+    except Exception:
+        return []
+
+
+@cache.memoize(timeout=600)
+def get_kajabi_active_customers(start_date):
+    """Return (active_count, total_customers) where active = logged in since start_date."""
+    token = get_kajabi_token()
+    if not token:
+        return 0, 0
+
+    url = "https://api.kajabi.com/v1/customers"
+    headers = {"Authorization": f"Bearer {token}"}
+    ist = pytz.timezone('Asia/Kolkata')
+    dt_limit_ist = ist.localize(datetime.combine(start_date, datetime.min.time()))
+
+    active_count = 0
+    total_customers = 0
+    next_url = f"{url}?limit=100"
+    page = 0
+
+    while next_url and page < 50:
+        try:
+            resp = requests.get(next_url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            if page == 0:
+                total_customers = data.get('meta', {}).get('total', 0)
+
+            batch = data.get('data', [])
+            if not batch:
+                break
+
+            stop_fetching = False
+            for c in batch:
+                attrs = c.get('attributes', {})
+                u_str = attrs.get('updated_at')
+                if u_str:
+                    try:
+                        u_date = datetime.fromisoformat(u_str.replace('Z', '+00:00')).astimezone(ist)
+                        if u_date < dt_limit_ist:
+                            stop_fetching = True
+                    except Exception:
+                        pass
+
+                lr_str = attrs.get('last_request_at')
+                if lr_str:
+                    try:
+                        lr_date = datetime.fromisoformat(lr_str.replace('Z', '+00:00')).astimezone(ist)
+                        if lr_date >= dt_limit_ist:
+                            active_count += 1
+                    except Exception:
+                        pass
+
+            if stop_fetching:
+                break
+            next_url = data.get('links', {}).get('next')
+            page += 1
+        except Exception:
+            break
+
+    return active_count, total_customers
+
+
+@cache.memoize(timeout=3600)
+def get_kajabi_offers():
+    """Fetch all Kajabi offers and return {offer_id: offer_title} map."""
+    token = get_kajabi_token()
+    if not token:
+        return {}
+    try:
+        url = "https://api.kajabi.com/v1/offers"
+        headers = {"Authorization": f"Bearer {token}"}
+        offers_map = {}
+        next_url = f"{url}?limit=100"
+        while next_url:
+            resp = requests.get(next_url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            for item in data.get('data', []):
+                offers_map[item['id']] = item['attributes']['title']
+            next_url = data.get('links', {}).get('next')
+        return offers_map
+    except Exception:
+        return {}
+
+
+# ---------------- GOOGLE SHEETS (RENEW) ----------------
+RENEW_SHEET_URL = "https://script.google.com/macros/s/AKfycbyid7u5OIJbemqEyawmvRsJyF6XmplsjNw-u9DqDuI7dm59hxSuykJOk2Yeeyc5riDtfg/exec"
+
+
+@cache.memoize(timeout=600)
+def get_renew_sheet_data(target_month_start, target_month_end, course_filter=None):
+    """Fetch renewal data from Google Sheets. Returns (count, total_revenue, dataframe)."""
+    if not RENEW_SHEET_URL or "script.google.com" not in RENEW_SHEET_URL:
+        return 0, 0, pd.DataFrame()
+    try:
+        response = requests.get(RENEW_SHEET_URL, timeout=15)
+        data = response.json()
+        df = pd.DataFrame(data)
+        
+        # New Column structure handling
+        date_col = 'Payment Paid Date/ Initial Amount Paid Date'
+        fee_col = 'Fee Amount'
+        course_col = 'Course'
+        
+        if fee_col in df.columns:
+            df[fee_col] = pd.to_numeric(df[fee_col], errors='coerce').fillna(0)
         else:
-            filtered_metrics['metric_7'] = {}
-        filter_info = []
-        if selected_courses:
-            filter_info.append(f"{len(selected_courses)} courses")
-        if selected_owners:
-            filter_info.append(f"{len(selected_owners)} owners")
-        if selected_statuses:
-            filter_info.append(f"{len(selected_statuses)} statuses")
-        
-        if filter_info:
-            st.info(f" Showing {len(filtered_df):,} contacts (filtered by: {', '.join(filter_info)})")
-        else:
-            st.info(f" Showing all {len(filtered_df):,} contacts (no filters applied)")
-        
-        # [OK] NEW: Calculate filtered revenue and matrix data
-        filtered_revenue_data = create_course_revenue(filtered_customers)
-        filtered_matrix_data = create_volume_conversion_matrix(
-            filtered_metrics['metric_1'], filtered_df, filtered_customers
-        )
-        
-        # [OK] Enhanced Executive KPI Dashboard
-        st.markdown('<div class="section-header"><h2> Executive Business Dashboard</h2></div>', unsafe_allow_html=True)
-        
-        # Calculate TOTAL KPIs (Unfiltered)
-        kpis = calculate_kpis(df_contacts, df_customers)
-        
-        # Primary KPI Row
-        st.markdown(
-            render_kpi_row([
-                render_kpi("Total Leads", f"{kpis['total_leads']:,}", "From Contacts", "kpi-box-blue"),
-                render_kpi("Deal Leads", f"{kpis['deal_leads']:,}", f"{kpis['lead_to_deal_pct']}% conversion", "kpi-box-green"),
-                render_kpi("Qualified Leads", f"{kpis['qualified_lead']:,}", "Created & Closed", "kpi-box-orange"),
-                render_kpi("Qualified Lead Value", f"Rs.{kpis['qualified_lead_revenue']:,.0f}", "Revenue Amount", "kpi-box-teal"),
-                render_kpi("Customers", f"{kpis['customer']:,}", "From Deals ONLY", "deal-kpi"),
-                render_kpi("Total Revenue", f"Rs.{kpis['total_revenue']:,.0f}", f"From {kpis['customer']:,} customers", "revenue-kpi"),
-            ]),
-            unsafe_allow_html=True
-        )
-        
-        # Warning if there are customers in leads
-        if kpis['customer_in_leads'] > 0:
-            st.error(f" DATA ISSUE: {kpis['customer_in_leads']} 'Customer' entries found in leads data")
-        
-        # Secondary KPI Row
-        st.markdown(
-            render_kpi_row([
-                render_secondary_kpi("Lead->Customer", f"{kpis['lead_to_customer_pct']}%", "Leads become customers"),
-                render_secondary_kpi("Lead->Deal", f"{kpis['lead_to_deal_pct']}%", "Leads in pipeline"),
-                render_secondary_kpi("Deal->Customer", f"{kpis['deal_to_customer_pct']}%", "Pipeline conversion"),
-                render_secondary_kpi("Avg Revenue", f"Rs.{kpis['avg_revenue_per_customer']:,}", "Per customer"),
-                render_secondary_kpi("Top Course", kpis['top_course'], "By lead volume"),
-            ], container_class="secondary-kpi-container"),
-            unsafe_allow_html=True
-        )
-        
-        # [OK] NEW: Filtered KPI Cards
-        if selected_courses or selected_owners or selected_statuses:
-            filtered_kpis = calculate_kpis(filtered_df, filtered_customers)
+            df[fee_col] = 0
             
-            st.markdown('<div class="section-header"><h3> Filtered View KPIs</h3></div>', unsafe_allow_html=True)
+        if date_col in df.columns:
+            # Shift UTC to IST correctly
+            dt_series = pd.to_datetime(df[date_col].astype(str).str.strip(), errors='coerce', utc=True)
+            df['Parsed Date'] = dt_series.dt.tz_convert('Asia/Kolkata').dt.date
             
-            st.markdown(
-                render_kpi_row([
-                    render_kpi("Filtered Leads", f"{filtered_kpis['total_leads']:,}", f"{filtered_kpis['total_leads']/kpis['total_leads']*100:.1f}% of total", "kpi-box-orange"),
-                    render_kpi("Lead->Customer %", f"{filtered_kpis['lead_to_customer_pct']}%", f"{filtered_kpis['customer']:,} customers", "kpi-box-green"),
-                    render_kpi("Lead->Deal %", f"{filtered_kpis['lead_to_deal_pct']}%", f"{filtered_kpis['deal_leads']:,} deals", "kpi-box-purple"),
-                    render_kpi("Total Revenue", f"Rs.{filtered_kpis['total_revenue']:,.0f}", f"Filtered revenue", "revenue-kpi"),
-                ]),
-                unsafe_allow_html=True
-            )
+            mask = (df['Parsed Date'] >= target_month_start) & (df['Parsed Date'] <= target_month_end)
             
-            # Download filtered data
-            st.markdown("###  Download Filtered Data")
-            col_f1, col_f2 = st.columns(2)
-            
-            with col_f1:
-                csv_filtered = filtered_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label=" Download Filtered Data (CSV)",
-                    data=csv_filtered,
-                    file_name=f"hubspot_filtered_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-        
-        st.divider()
-        
-        # [OK] ENHANCED: Create tabs with NEW METRIC 6 & 7 tab
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs([
-            " Lead Analysis", 
-            " Customer Analysis", 
-            " Owner KPI Dashboard",
-            " Course KPI Dashboard",
-            " Owner Visual Analytics",
-            " Lead Status Metrics",  # [OK] NEW TAB FOR METRIC 6
-            " Volume vs Conversion",
-            " Revenue Analysis",
-            "vs Comparison View",
-            " Team performance1",
-            " Month Comparison", # [OK] NEW TAB FOR MONTH COMPARISON
-            " Team Performance 2",
-            " This month lead performance",
-            " Qualified Lead Drill-down"
-        ])
-        
-        # SECTION 1: Lead Analysis
-        with tab1:
-            st.markdown('<div class="section-header"><h3> Lead Analysis (Contacts)</h3></div>', unsafe_allow_html=True)
-            
-            # Lead Status Distribution
-            st.markdown("#### Lead Status Distribution")
-            
-            status_counts = filtered_df['Lead Status'].value_counts().reset_index()
-            status_counts.columns = ['Lead Status', 'Count']
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                fig = px.pie(
-                    status_counts,
-                    values='Count',
-                    names='Lead Status',
-                    title='Lead Status Distribution',
-                    hole=0.3,
-                    color_discrete_sequence=COLOR_PALETTE
-                )
-                fig.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig, width='stretch')
-            
-            with col2:
-                # Top Courses
-                if 'Course/Program' in filtered_df.columns:
-                    course_counts = filtered_df['Course/Program'].value_counts().head(10).reset_index()
-                    course_counts.columns = ['Course', 'Count']
-                    
-                    fig = px.bar(
-                        course_counts,
-                        x='Course',
-                        y='Count',
-                        title='Top 10 Courses by Lead Volume',
-                        color='Count',
-                        color_continuous_scale='Viridis'
-                    )
-                    fig.update_layout(xaxis_tickangle=-45, height=400)
-                    st.plotly_chart(fig, width='stretch')
-            
-            # Lead Data Table
-            st.markdown("#### Lead Data")
-            st.dataframe(filtered_df, width='stretch', height=300)
-        
-        # SECTION 2: Customer Analysis
-        with tab2:
-            st.markdown('<div class="section-header"><h3> Customer Analysis (From Deals)</h3></div>', unsafe_allow_html=True)
-            
-            if filtered_customers is not None and not filtered_customers.empty:
-                # Customer KPIs
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    total_customers = len(filtered_customers)
-                    st.metric("Total Customers", f"{total_customers:,}")
-                
-                with col2:
-                    total_revenue = filtered_customers['Amount'].sum()
-                    st.metric("Total Revenue", f"Rs.{total_revenue:,.0f}")
-                
-                with col3:
-                    avg_revenue = filtered_customers['Amount'].mean()
-                    st.metric("Avg Deal Value", f"Rs.{avg_revenue:,.0f}")
-                
-                # Revenue by Course
-                st.markdown("#### Revenue by Course")
-                
-                if 'Course/Program' in filtered_customers.columns:
-                    revenue_by_course = filtered_customers.groupby('Course/Program')['Amount'].sum().reset_index()
-                    revenue_by_course = revenue_by_course.sort_values('Amount', ascending=False).head(10)
-                    
-                    fig = px.bar(
-                        revenue_by_course,
-                        x='Course/Program',
-                        y='Amount',
-                        title='Top 10 Courses by Revenue',
-                        color='Amount',
-                        color_continuous_scale='Viridis',
-                        text='Amount'
-                    )
-                    fig.update_traces(
-                        texttemplate='Rs.%{text:,.0f}',
-                        textposition='outside'
-                    )
-                    fig.update_layout(xaxis_tickangle=-45, height=400)
-                    st.plotly_chart(fig, width='stretch')
-                
-                # Customer Data Table
-                st.markdown("#### Customer Deal Data")
-                display_df = filtered_customers.copy()
-                if 'Amount' in display_df.columns:
-                    display_df['Amount'] = display_df['Amount'].apply(lambda x: f"Rs.{x:,.0f}")
-                st.dataframe(display_df, width='stretch', height=300)
-            else:
-                st.info("No customer data available")
-        
-        # SECTION 3: Owner KPI Dashboard
-        with tab3:
-            st.markdown('<div class="section-header"><h3> Owner Performance KPI Dashboard</h3></div>', unsafe_allow_html=True)
-            
-            metric_4 = filtered_metrics['metric_4']
-            
-            if not metric_4.empty:
-                # KPI Table with conditional formatting
-                st.markdown("#### Owner Performance KPI Table")
-                
-                # [OK] NEW: Filter out stage-based customer metrics ONLY HERE
-                # "ONLY REMMOVE IN Owner Performance METRICS BRO"
-                cols_to_hide = ['Hot_Customer', 'Warm_Customer', 'Cold_Customer']
-                display_cols = [c for c in metric_4.columns if c not in cols_to_hide]
-                
-                # Filter out specific owners
-                owners_to_exclude = ['Aneesha S', 'Sonia William']
-                display_df = metric_4[~metric_4['Course Owner'].isin(owners_to_exclude)].copy()
-                
-                # Calculate TOTAL Row dynamically
-                total_row = pd.Series(index=display_df.columns, dtype='object')
-                total_row['Course Owner'] = 'TOTAL'
-                
-                numeric_cols = [c for c in display_df.columns if c not in ['Course Owner', 'Deal %', 'Customer %', 'Lead->Deal %', 'Lead->Customer %', 'Qualified Lead %', 'Lead->Qualified Lead %']]
-                for col in numeric_cols:
-                    if col in display_df.columns:
-                        total_row[col] = pd.to_numeric(display_df[col], errors='coerce').sum()
-                
-                grand_total = total_row.get('Grand Total', 0)
-                deal_leads = total_row.get('Deal Leads', 0)
-                customers = total_row.get('Customer', 0)
-                
-                total_row['Deal %'] = (deal_leads / grand_total * 100).round(2) if grand_total > 0 else 0
-                total_row['Customer %'] = (customers / deal_leads * 100).round(2) if deal_leads > 0 else 0
-                total_row['Lead->Deal %'] = (deal_leads / grand_total * 100).round(2) if grand_total > 0 else 0
-                total_row['Lead->Customer %'] = (customers / grand_total * 100).round(2) if grand_total > 0 else 0
-                
-                display_df = pd.concat([display_df, pd.DataFrame([total_row])], ignore_index=True)
-                display_df = display_df[display_cols]
-                
-                def highlight_lead_to_customer(val):
-                    if isinstance(val, (int, float)):
-                        if val < 3:
-                            return 'background-color: #f8d7da; color: #721c24; font-weight: bold'
-                        elif val < 8:
-                            return 'background-color: #fff3cd; color: #856404; font-weight: bold'
-                        else:
-                            return 'background-color: #d4edda; color: #155724; font-weight: bold'
-                    return ''
-                    
-                def highlight_total_row(s):
-                    is_total = s['Course Owner'] == 'TOTAL'
-                    return ['background-color: #d4edda; font-weight: bold' if is_total else '' for _ in s]
-                
-                # Apply styling to the filtered dataframe
-                styled_df = display_df.style.apply(highlight_total_row, axis=1).applymap(highlight_lead_to_customer, subset=['Lead->Customer %'])
-                
-                st.dataframe(styled_df, use_container_width=True, height=400)
-        
-        # SECTION 4: Course Performance KPI Dashboard
-        with tab4:
-            st.markdown('<div class="section-header"><h3> Course Performance KPI Dashboard</h3></div>', unsafe_allow_html=True)
-            
-            metric_5 = filtered_metrics['metric_5']
-            
-            if not metric_5.empty:
-                # KPI Table with conditional formatting
-                st.markdown("#### Course Performance KPI Table")
-                
-                def highlight_course_performance(val):
-                    if isinstance(val, (int, float)):
-                        if val < 3:
-                            return 'background-color: #f8d7da; color: #721c24; font-weight: bold'
-                        elif val < 8:
-                            return 'background-color: #fff3cd; color: #856404; font-weight: bold'
-                        else:
-                            return 'background-color: #d4edda; color: #155724; font-weight: bold'
-                    return ''
-                
-                # Apply conditional formatting
-                styled_df = metric_5.style.applymap(
-                    highlight_course_performance, 
-                    subset=['Lead->Customer %']
-                ).applymap(
-                    highlight_course_performance, 
-                    subset=['Customer %']
-                )
-                
-                st.dataframe(styled_df, use_container_width=True, height=400)
-                
-                # Download Course KPI Data
-                st.markdown("###  Export Course KPI Data")
-                col_course1, col_course2 = st.columns(2)
-                
-                with col_course1:
-                    csv_course = metric_5.to_csv(index=False)
-                    st.download_button(
-                        " Download Course KPI Data (CSV)",
-                        csv_course,
-                        "course_performance_kpi.csv",
-                        "text/csv",
-                        use_container_width=True
-                    )
-            else:
-                st.info("No course performance data available")
-        
-        # SECTION 5: Owner Visual Analytics
-        with tab5:
-            st.markdown('<div class="section-header"><h3> Course Owner Visual Analytics</h3></div>', unsafe_allow_html=True)
-            
-            metric_4 = filtered_metrics['metric_4']
-            
-            if not metric_4.empty:
-                # Owner Selection for Comparison
-                st.markdown("###  Select Owners for Comparison")
-                
-                owner_names = metric_4['Course Owner'].unique().tolist()
-                owner_names = [str(name) for name in owner_names if str(name) != '']
-                
-                selected_owners_visual = st.multiselect(
-                    "Choose owners to compare:",
-                    options=owner_names[:20] if len(owner_names) > 20 else owner_names,
-                    default=owner_names[:3] if len(owner_names) >= 3 else owner_names,
-                    help="Select up to 4 owners for visual comparison"
-                )
-                
-                # Limit to 4 owners for better visualization
-                if len(selected_owners_visual) > 4:
-                    st.warning(" Showing only first 4 owners for better visualization")
-                    selected_owners_visual = selected_owners_visual[:4]
-                
-                if selected_owners_visual:
-                    # 1. Owner Scorecards
-                    st.markdown("###  Owner Performance Scorecards")
-                    
-                    scorecards = create_owner_scorecards(metric_4[metric_4['Course Owner'].isin(selected_owners_visual)], top_n=6)
-                    
-                    if scorecards:
-                        # Display scorecards in a grid
-                        cols = st.columns(3)
-                        for idx, scorecard in enumerate(scorecards):
-                            with cols[idx % 3]:
-                                st.markdown(scorecard, unsafe_allow_html=True)
-                    
-                    # 2. Owner Comparison Radar Chart
-                    st.markdown("###  Owner Performance Comparison")
-                    
-                    radar_fig, radar_owners = create_owner_radar_chart(metric_4, selected_owners_visual)
-                    
-                    if radar_fig:
-                        st.plotly_chart(radar_fig, use_container_width=True)
-                        
-                        st.markdown("""
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                        <strong> How to read this chart:</strong><br>
-                         Each colored area represents one owner's performance<br>
-                         The wider the area, the better the performance<br>
-                         Compare shapes to see strengths & weaknesses
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    # 3. Owner Funnel Comparison
-                    st.markdown("###  Owner Funnel Comparison")
-                    
-                    funnel_fig = create_owner_funnel_chart(metric_4, selected_owners_visual)
-                    
-                    if funnel_fig:
-                        st.plotly_chart(funnel_fig, use_container_width=True)
-                        
-                        st.markdown("""
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                        <strong> How to read this chart:</strong><br>
-                         Shows how leads move through each owner's pipeline<br>
-                         Wider bars = more leads at that stage<br>
-                         Compare conversion rates between owners
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    # 4. Owner Performance Grid
-                    st.markdown("###  Owner Leaderboard")
-                    
-                    performance_grid = create_owner_performance_grid(metric_4[metric_4['Course Owner'].isin(selected_owners_visual)])
-                    
-                    if performance_grid:
-                        st.markdown(performance_grid, unsafe_allow_html=True)
-                    
-                    # 5. Performance Heatmap
-                    st.markdown("###  Performance Heatmap")
-                    
-                    heatmap_data = create_owner_performance_heatmap(metric_4[metric_4['Course Owner'].isin(selected_owners_visual)])
-                    
-                    if heatmap_data is not None and not heatmap_data.empty:
-                        fig = px.imshow(
-                            heatmap_data,
-                            title="Owner Performance Heatmap",
-                            color_continuous_scale='RdYlGn',
-                            aspect="auto",
-                            labels=dict(color="Performance Score")
-                        )
-                        fig.update_layout(height=400)
-                        st.plotly_chart(fig, width='stretch')
-                        
-                        st.markdown("""
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                        <strong> Heatmap Legend:</strong><br>
-                          Green = High performance<br>
-                          Yellow = Medium performance<br>
-                          Red = Low performance<br>
-                         Compare owners across key metrics
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    # 6. Download Owner Visualizations
-                    st.markdown("###  Export Owner Analysis")
-                    
-                    col_vis1, col_vis2 = st.columns(2)
-                    
-                    with col_vis1:
-                        # Create summary of selected owners
-                        owner_summary = metric_4[metric_4['Course Owner'].isin(selected_owners_visual)].copy()
-                        if not owner_summary.empty:
-                            csv_owner = owner_summary.to_csv(index=False)
-                            st.download_button(
-                                " Download Selected Owner Data",
-                                csv_owner,
-                                "owner_performance_summary.csv",
-                                "text/csv",
-                                use_container_width=True
-                            )
-                    
-                    with col_vis2:
-                        if st.button(" Capture Visual Report", use_container_width=True):
-                            st.success("Owner visualizations captured! Use browser print (Ctrl+P) to save as PDF")
-                
-                else:
-                    st.info(" Please select owners from the dropdown above to see visual analytics")
-            else:
-                st.info("No owner performance data available")
-        
-        # [OK] NEW SECTION 6: Lead Status Metrics
-        with tab6:
-            st.markdown('<div class="section-header"><h3> Lead Status Breakdown</h3></div>', unsafe_allow_html=True)
-            
-            metric_6 = filtered_metrics['metric_6']
-            
-            if not metric_6.empty:
-                # Total leads summary
-                total_leads = len(filtered_df)
-                
-                # Get status counts for visualization
-                status_counts = filtered_df['Lead Status'].value_counts()
-                
-                # Display visual metrics
-                status_amounts = filtered_df.groupby('Lead Status')['Amount'].sum().to_dict()
-                st.markdown(
-                    render_lead_status_metrics(status_counts, total_leads, status_amounts),
-                    unsafe_allow_html=True
-                )
-                
-                # Display detailed table
-                st.markdown("###  Detailed Lead Status Metrics")
-                
-                # Apply conditional formatting to the table
-                def highlight_status_row(row):
-                    colors = {
-                        'Hot': '#dc3545',
-                        'Warm': '#fd7e14',
-                        'Cold': '#0d6efd',
-                        'New Lead': '#20c997',
-                        'Qualified Lead': '#28a745',
-                        'Not Interested': '#6c757d',
-                        'Not Connected': '#6f42c1',
-                        'Not Qualified': '#17a2b8',
-                        'Duplicate': '#ffc107',
-                        'Upselling': '#9c27b0',
-                        'Course Shifting': '#795548',
-                        'Unknown': '#607d8b'
-                    }
-                    
-                    status = str(row['Lead Status'])
-                    bg_color = colors.get(status, '#f8f9fa')
-                    return [
-                        f'background-color: {bg_color}20; font-weight: bold',
-                        f'background-color: {bg_color}20',
-                        f'background-color: {bg_color}20'
-                    ]
-                
-                # Display the table with styling
-                display_df = metric_6.copy()
-                if not display_df.empty:
-                    # Format percentages
-                    display_df['Percentage'] = display_df['Percentage'].apply(lambda x: f"{x:.2f}%")
-                    
-                    # Apply styling
-                    styled_df = display_df.style.apply(highlight_status_row, axis=1)
-                    
-                    st.dataframe(styled_df, use_container_width=True, height=400)
-                
-                # Key insights
-                st.markdown("###  Key Insights")
-                
-                col_insight1, col_insight2, col_insight3, col_insight4 = st.columns(4)
-                
-                with col_insight1:
-                    # Deal pipeline status
-                    deal_statuses = ['Hot', 'Warm', 'Cold', 'Qualified Lead']
-                    deal_leads = sum([status_counts.get(status, 0) for status in deal_statuses])
-                    deal_pct = (deal_leads / total_leads * 100) if total_leads > 0 else 0
-                    
-                    st.metric(
-                        "In Pipeline",
-                        f"{deal_leads:,}",
-                        f"{deal_pct:.1f}% of total"
-                    )
-                
-                with col_insight2:
-                    # Disqualified status
-                    disqualified_statuses = ['Not Interested', 'Not Qualified', 'Duplicate']
-                    disqualified_leads = sum([status_counts.get(status, 0) for status in disqualified_statuses])
-                    disqualified_pct = (disqualified_leads / total_leads * 100) if total_leads > 0 else 0
-                    
-                    st.metric(
-                        "Disqualified",
-                        f"{disqualified_leads:,}",
-                        f"{disqualified_pct:.1f}% of total"
-                    )
-                
-                with col_insight3:
-                    # New leads
-                    new_leads = status_counts.get('New Lead', 0)
-                    new_pct = (new_leads / total_leads * 100) if total_leads > 0 else 0
-                    
-                    st.metric(
-                        "New Leads",
-                        f"{new_leads:,}",
-                        f"{new_pct:.1f}% of total"
-                    )
+            # Apply Course Filtering
+            if course_filter and course_col in df.columns:
+                # Map each row's course to main course category
+                df['Main Course'] = df[course_col].apply(lambda x: get_main_course(str(x)))
+                mask &= (df['Main Course'].str.lower() == course_filter.lower())
 
-                with col_insight4:
-                    # Qualified Lead Amount
-                    qualified_leads = status_counts.get('Qualified Lead', 0)
-                    qualified_revenue = status_amounts.get('Qualified Lead', 0)
-                    
-                    st.metric(
-                        "Qualified Lead Value",
-                        f"Rs.{qualified_revenue:,.0f}",
-                        f"From {qualified_leads:,} leads"
-                    )
-                
-                # Download button for lead status metrics
-                st.markdown("###  Export Lead Status Metrics")
-                
-                col_dl1, col_dl2 = st.columns(2)
-                
-                with col_dl1:
-                    csv_data = metric_6.to_csv(index=False)
-                    st.download_button(
-                        " Download Lead Status Data (CSV)",
-                        csv_data,
-                        "lead_status_metrics.csv",
-                        "text/csv",
-                        use_container_width=True
-                    )
-                
-                with col_dl2:
-                    # Create a chart for visualization
-                    if len(status_counts) > 0:
-                        chart_data = status_counts.reset_index()
-                        chart_data.columns = ['Lead Status', 'Count']
-                        
-                        fig = px.bar(
-                            chart_data,
-                            x='Lead Status',
-                            y='Count',
-                            title='Lead Status Distribution',
-                            color='Lead Status',
-                            color_discrete_sequence=px.colors.qualitative.Set3
-                        )
-                        fig.update_layout(xaxis_tickangle=-45, height=400)
-                        st.plotly_chart(fig, width='stretch')
-            else:
-                st.info("No lead status data available")
-        
-        # SECTION 7: Volume vs Conversion Matrix
-        with tab7:
-            st.markdown('<div class="section-header"><h3> Volume vs Conversion Matrix</h3></div>', unsafe_allow_html=True)
+            df_filtered = df.loc[mask]
             
-            # Calculate conversions PER COURSE (Filtered)
-            conversion_data = []
-            for _, row in filtered_metrics['metric_1'].iterrows():
-                course = row['Course']
-                total = row.get('Total', 0)
-                
-                if total > 0:
-                    # Get customer count for this course from filtered deals
-                    customer_count = 0
-                    if filtered_customers is not None and not filtered_customers.empty:
-                        customer_count = len(filtered_customers[filtered_customers['Course/Program'] == course]) if course in filtered_customers['Course/Program'].values else 0
-                    
-                    conversion_pct = round((customer_count / total * 100), 1)
-                    
-                    conversion_data.append({
-                        'Course': course,
-                        'Conversion %': conversion_pct,
-                        'Total': total,
-                        'Customer': customer_count
-                    })
-            
-            if conversion_data:
-                conversion_df = pd.DataFrame(conversion_data)
-                top_conversion_courses = conversion_df.nlargest(3, 'Conversion %')
-                
-                conversion_kpis = []
-                for _, row in top_conversion_courses.iterrows():
-                    course_name = row['Course'][:12] + "..." if len(row['Course']) > 12 else row['Course']
-                    conversion_kpis.append(render_secondary_kpi(
-                        course_name,
-                        f"{row['Conversion %']}%",
-                        f"{row['Total']:,} leads -> {row['Customer']:,} customers"
-                    ))
-                
-                st.markdown("####  Top 3 Courses by Lead->Customer Conversion %")
-                st.markdown(
-                    render_kpi_row(conversion_kpis, container_class="secondary-kpi-container"),
-                    unsafe_allow_html=True
-                )
-            
-            # Volume vs Conversion Matrix
-            st.markdown("####  Volume vs Conversion Matrix (Strategic View)")
-            
-            if filtered_matrix_data is not None and not filtered_matrix_data.empty:
-                # Apply conditional formatting for the matrix
-                def color_matrix(val):
-                    if val == " Star":
-                        return 'background-color: #d4edda; color: #155724; font-weight: bold'
-                    elif val == " Potential":
-                        return 'background-color: #cce5ff; color: #004085; font-weight: bold'
-                    elif " Burn" in val:
-                        return 'background-color: #fff3cd; color: #856404; font-weight: bold'
-                    elif val == " Weak":
-                        return 'background-color: #f8d7da; color: #721c24; font-weight: bold'
-                    return ''
-                
-                # Display with styling
-                styled_matrix = filtered_matrix_data.style.applymap(color_matrix, subset=['Segment'])
-                
-                col_mat1, col_mat2 = st.columns([3, 1])
-                with col_mat1:
-                    st.dataframe(styled_matrix, use_container_width=True, height=350)
-            
-                with col_mat2:
-                    st.markdown("####  Matrix Legend")
-                    st.markdown("""
-                    <div style='background-color: #d4edda; padding: 10px; border-radius: 5px; margin: 5px 0;'>
-                    <strong> Star</strong><br>
-                    High Volume + High Conversion
-                    </div>
-                    
-                    <div style='background-color: #cce5ff; padding: 10px; border-radius: 5px; margin: 5px 0;'>
-                    <strong> Potential</strong><br>
-                    Low Volume + High Conversion
-                    </div>
-                    
-                    <div style='background-color: #fff3cd; padding: 10px; border-radius: 5px; margin: 5px 0;'>
-                    <strong> Burn</strong><br>
-                    High Volume + Low Conversion
-                    </div>
-                    
-                    <div style='background-color: #f8d7da; padding: 10px; border-radius: 5px; margin: 5px 0;'>
-                    <strong> Weak</strong><br>
-                    Low Volume + Low Conversion
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.info("No matrix data available for selected filters")
-        
-        # SECTION 8: Revenue Analysis
-        with tab8:
-            st.markdown('<div class="section-header"><h3> Revenue Analysis by Course</h3></div>', unsafe_allow_html=True)
-            
-            if filtered_revenue_data is not None and not filtered_revenue_data.empty:
-                # Top Revenue Course KPI
-                top_revenue = filtered_revenue_data.iloc[0] if len(filtered_revenue_data) > 0 else None
-                total_revenue = filtered_revenue_data['Revenue'].sum()
-                total_customers = filtered_revenue_data['Customers'].sum()
-                
-                if top_revenue is not None:
-                    st.markdown(
-                        render_kpi_row([
-                            render_kpi("Best Revenue Course", top_revenue['Course'][:20], f"Rs.{top_revenue['Revenue']:,.0f} revenue", "revenue-kpi"),
-                            render_kpi("Total Revenue", f"Rs.{total_revenue:,.0f}", f"{total_customers} customers", "kpi-box-green"),
-                            render_kpi("Avg Revenue/Customer", f"Rs.{filtered_revenue_data['Revenue per Customer'].mean():,.0f}", "Average", "kpi-box-purple"),
-                            render_kpi("Courses with Revenue", f"{len(filtered_revenue_data)}", "Active revenue courses", "kpi-box-blue"),
-                        ]),
-                        unsafe_allow_html=True
-                    )
-                
-                # Revenue Distribution Chart
-                st.markdown("#### Revenue Distribution by Course")
-                
-                top_revenue_chart = filtered_revenue_data.head(10).copy()
-                top_revenue_chart['Course'] = top_revenue_chart['Course'].str.slice(0, 25)
-                
-                fig1 = px.bar(
-                    top_revenue_chart,
-                    x='Course',
-                    y='Revenue',
-                    title='Top 10 Courses by Revenue',
-                    color='Revenue',
-                    color_continuous_scale='Viridis',
-                    text='Revenue'
-                )
-                fig1.update_traces(
-                    texttemplate='Rs.%{text:,.0f}',
-                    textposition='outside'
-                )
-                fig1.update_layout(
-                    xaxis_tickangle=-45,
-                    xaxis_title="",
-                    yaxis_title="Revenue (Rs.)",
-                    height=400,
-                    coloraxis_showscale=False
-                )
-                st.plotly_chart(fig1, use_container_width=True)
-                
-                # Revenue Data Table
-                st.markdown("#### Detailed Revenue Data")
-                
-                # Format revenue columns
-                display_revenue = filtered_revenue_data.copy()
-                display_revenue['Revenue'] = display_revenue['Revenue'].apply(lambda x: f"Rs.{x:,.0f}")
-                display_revenue['Revenue per Customer'] = display_revenue['Revenue per Customer'].apply(lambda x: f"Rs.{x:,.0f}")
-                
-                st.dataframe(display_revenue, use_container_width=True, height=350)
-                
-                # Download revenue data
-                st.markdown("####  Export Revenue Data")
-                col_rev1, col_rev2 = st.columns(2)
-                
-                with col_rev1:
-                    csv_rev = filtered_revenue_data.to_csv(index=False)
-                    st.download_button(
-                        " Download Revenue Data (CSV)",
-                        csv_rev,
-                        "course_revenue_data.csv",
-                        "text/csv",
-                        use_container_width=True
-                    )
-                
-            else:
-                st.info("No revenue data available. Make sure deals have 'Amount' field populated in HubSpot.")
-        
-        # SECTION 9: COMPARISON VIEW
-        with tab9:
-            st.markdown('<div class="section-header"><h3>vs Comparison View</h3></div>', unsafe_allow_html=True)
-            
-            # Comparison controls
-            st.markdown("#### Comparison Configuration")
-            
-            col_a, col_b = st.columns(2)
-            
-            with col_a:
-                comparison_type = st.selectbox(
-                    "Comparison Type:",
-                    ["Course vs Course", "Owner vs Owner", "Course vs Owner"]
-                )
-            
-            with col_b:
-                # Get available items based on comparison type
-                if comparison_type == "Course vs Course":
-                    items = filtered_metrics['metric_1']['Course'].tolist() if not filtered_metrics['metric_1'].empty else []
-                    items = [str(i).strip() for i in items if str(i).strip() != '']
-                    if items:
-                        item1 = st.selectbox("Select Course 1:", items)
-                        remaining_items = [i for i in items if i != item1]
-                        item2 = st.selectbox("Select Course 2:", ["Select..."] + remaining_items) if remaining_items else None
-                    else:
-                        item1 = None
-                        item2 = None
-                
-                elif comparison_type == "Owner vs Owner":
-                    items = filtered_metrics['metric_2']['Course Owner'].tolist() if not filtered_metrics['metric_2'].empty else []
-                    items = [str(i).strip() for i in items if str(i).strip() != '']
-                    if items:
-                        item1 = st.selectbox("Select Owner 1:", items)
-                        remaining_items = [i for i in items if i != item1]
-                        item2 = st.selectbox("Select Owner 2:", ["Select..."] + remaining_items) if remaining_items else None
-                    else:
-                        item1 = None
-                        item2 = None
-                
-                else:  # Course vs Owner
-                    courses = filtered_metrics['metric_1']['Course'].tolist() if not filtered_metrics['metric_1'].empty else []
-                    courses = [str(c).strip() for c in courses if str(c).strip() != '']
-                    owners = filtered_metrics['metric_2']['Course Owner'].tolist() if not filtered_metrics['metric_2'].empty else []
-                    owners = [str(o).strip() for o in owners if str(o).strip() != '']
-                    
-                    item1 = st.selectbox("Select Course:", ["Select..."] + courses) if courses else None
-                    item2 = st.selectbox("Select Owner:", ["Select..."] + owners) if owners else None
-            
-            # Perform comparison
-            if item1 and item2 and item1 != "Select..." and item2 != "Select...":
-                comparison_results = create_comparison_data(
-                    filtered_df, filtered_customers, comparison_type, item1, item2
-                )
-                
-                if comparison_results:
-                    st.markdown(f"### Comparing: **{item1}** vs **{item2}**")
-                    
-                    if comparison_results['type'] == 'course_vs_course':
-                        # Create KPI comparison cards
-                        if 'deal_pct1' in comparison_results and 'deal_pct2' in comparison_results:
-                            st.markdown(
-                                render_kpi_row([
-                                    render_kpi(f"{item1[:15]}", f"{comparison_results['deal_pct1']}%", "Lead->Deal %", "kpi-box-blue"),
-                                    render_kpi("VS", "", "Comparison", "kpi-box"),
-                                    render_kpi(f"{item2[:15]}", f"{comparison_results['deal_pct2']}%", "Lead->Deal %", "kpi-box-green"),
-                                ]),
-                                unsafe_allow_html=True
-                            )
-                    
-                    elif comparison_results['type'] == 'owner_vs_owner':
-                        # Create owner comparison KPI cards
-                        if not comparison_results['data1'].empty and not comparison_results['data2'].empty:
-                            owner1_data = comparison_results['data1'].iloc[0] if len(comparison_results['data1']) > 0 else pd.Series()
-                            owner2_data = comparison_results['data2'].iloc[0] if len(comparison_results['data2']) > 0 else pd.Series()
-                            
-                            # Get key metrics
-                            owner1_lead_to_deal = owner1_data.get('Lead->Deal %', 0)
-                            owner1_lead_to_customer = owner1_data.get('Lead->Customer %', 0)
-                            owner2_lead_to_deal = owner2_data.get('Lead->Deal %', 0)
-                            owner2_lead_to_customer = owner2_data.get('Lead->Customer %', 0)
-                            
-                            st.markdown(
-                                render_kpi_row([
-                                    render_kpi(f"{item1[:12]}", f"{owner1_lead_to_deal}%", "Lead->Deal %", "kpi-box-blue"),
-                                    render_kpi("L->D %", "", "Metric", "kpi-box"),
-                                    render_kpi(f"{item2[:12]}", f"{owner2_lead_to_deal}%", "Lead->Deal %", "kpi-box-green"),
-                                ]),
-                                unsafe_allow_html=True
-                            )
-                            
-                            st.markdown(
-                                render_kpi_row([
-                                    render_kpi(f"{item1[:12]}", f"{owner1_lead_to_customer}%", "Lead->Customer %", "kpi-box-purple"),
-                                    render_kpi("L->C %", "", "Metric", "kpi-box"),
-                                    render_kpi(f"{item2[:12]}", f"{owner2_lead_to_customer}%", "Lead->Customer %", "kpi-box-teal"),
-                                ]),
-                                unsafe_allow_html=True
-                            )
-                    
-                    # Original visualization
-                    if comparison_results['type'] == 'course_vs_course':
-                        # ONE VISUAL: Side-by-side bar for % comparison
-                        if 'deal_pct1' in comparison_results and 'deal_pct2' in comparison_results:
-                            comp_data = pd.DataFrame({
-                                'Metric': ['Lead->Deal %'],
-                                item1[:20]: [comparison_results['deal_pct1']],
-                                item2[:20]: [comparison_results['deal_pct2']]
-                            })
-                            
-                            fig = px.bar(
-                                comp_data.melt(id_vars=['Metric'], var_name='Item', value_name='Percentage'),
-                                x='Metric',
-                                y='Percentage',
-                                color='Item',
-                                barmode='group',
-                                title='Performance Comparison (%)',
-                                text='Percentage',
-                                color_discrete_sequence=COLOR_PALETTE
-                            )
-                            fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-                            fig.update_layout(
-                                xaxis_title="",
-                                yaxis_title="Percentage (%)",
-                                height=400
-                            )
-                            st.plotly_chart(fig, width='stretch')
-                    
-                    elif comparison_results['type'] == 'owner_vs_owner':
-                        # ONE VISUAL: Funnel bar chart
-                        if not comparison_results['data1'].empty and not comparison_results['data2'].empty:
-                            # Get funnel data
-                            funnel_cols = ['Cold', 'Warm', 'Hot', 'Customer']
-                            owner1_data = comparison_results['data1'].iloc[0] if len(comparison_results['data1']) > 0 else pd.Series()
-                            owner2_data = comparison_results['data2'].iloc[0] if len(comparison_results['data2']) > 0 else pd.Series()
-                            
-                            comparison_list = []
-                            for col in funnel_cols:
-                                if col in owner1_data and col in owner2_data:
-                                    comparison_list.append({
-                                        'Stage': col,
-                                        item1[:15]: int(owner1_data[col]),
-                                        item2[:15]: int(owner2_data[col])
-                                    })
-                            
-                            if comparison_list:
-                                radar_df = pd.DataFrame(comparison_list)
-                                melted_df = radar_df.melt(id_vars=['Stage'], var_name='Owner', value_name='Count')
-                                
-                                # Create grouped bar chart instead of radar
-                                fig = px.bar(
-                                    melted_df,
-                                    x='Stage',
-                                    y='Count',
-                                    color='Owner',
-                                    barmode='group',
-                                    title='Funnel Comparison',
-                                    text='Count',
-                                    color_discrete_sequence=COLOR_PALETTE
-                                )
-                                fig.update_layout(
-                                    xaxis_title="Lead Stage",
-                                    yaxis_title="Count",
-                                    height=400
-                                )
-                                fig.update_traces(texttemplate='%{text}', textposition='outside')
-                                st.plotly_chart(fig, width='stretch')
-                    
-                    elif comparison_results['type'] == 'course_vs_owner':
-                        # ONE VISUAL: Heatmap
-                        if 'owner_courses' in comparison_results and not comparison_results['owner_courses'].empty:
-                            # Heatmap showing this owner's performance across courses
-                            heatmap_df = comparison_results['owner_courses'].set_index('Course/Program')
-                            
-                            fig = px.imshow(
-                                heatmap_df,
-                                labels=dict(x="Lead Status", y="Course", color="Count"),
-                                aspect="auto",
-                                title=f"{item2}'s Performance by Course",
-                                color_continuous_scale='RdYlGn'
-                            )
-                            fig.update_layout(height=400)
-                            st.plotly_chart(fig, width='stretch')
-            else:
-                st.info("Select two items to compare")
-        
-        # SECTION 9: Team performance1
-        with tab10:
-            st.markdown('<div class="section-header"><h3> Team performance1</h3></div>', unsafe_allow_html=True)
-            
-            if 'metric_4' in filtered_metrics and not filtered_metrics['metric_4'].empty:
-                # Dynamically construct team results from metric_4 using our dedicated temp function
-                team_results_1 = get_detailed_team_data_temp_logic(filtered_metrics['metric_4'])
-                
-                for team_name, team_df in team_results_1.items():
-                    if team_df.empty:
-                        continue
-                        
-                    st.markdown(f"#### {team_name}")
-                    
-                    # Style the dataframe - Highlight Total Row
-                    def highlight_total(s):
-                        is_total = s['Course Owner'] == 'TOTAL'
-                        return ['background-color: #d4edda; font-weight: bold' if is_total else '' for _ in s]
+            # Final verification log
+            nimmy_list = df[df['Student Name'].astype(str).str.contains('NIMMY', case=False)]
+            if not nimmy_list.empty:
+                logger.info(f"NIMMY Final Check: {nimmy_list[['Student Name', 'Parsed Date']].to_dict('records')}")
 
-                    st.dataframe(
-                        team_df.style.apply(highlight_total, axis=1).format({
-                            "Customer_Revenue": "Rs.{:,.0f}",
-                            "Customer": "{:,.0f}",
-                            "Deal %": "{:.1f}%",
-                            "Customer %": "{:.1f}%",
-                            "Lead->Deal %": "{:.1f}%",
-                            "Lead->Customer %": "{:.1f}%"
-                        }),
-                        use_container_width=True
-                    )
-                    
-                    st.divider()
-            
-            else:
-                 st.info("No team data available.")
-        
-        # [OK] NEW: SECTION 11: Team Performance 2 (SALES1.TXT logic)
-        with tab12:
-            st.markdown('<div class="section-header"><h3> Team Performance 2</h3></div>', unsafe_allow_html=True)
-            
-            # The exact, untouched original value block natively created via process_team_performance_metrics.
-            if 'metric_7' in filtered_metrics and isinstance(filtered_metrics['metric_7'], dict) and filtered_metrics['metric_7']:
-                team_results_2 = filtered_metrics['metric_7']
-                
-                for team_name, team_df in team_results_2.items():
-                    if team_df.empty:
-                        continue
-                        
-                    st.markdown(f"#### {team_name}")
-                    
-                    # Style the dataframe - Highlight Total Row
-                    def highlight_total(s):
-                        is_total = s['Course Owner'] == 'TOTAL'
-                        return ['background-color: #d4edda; font-weight: bold' if is_total else '' for _ in s]
+            logger.info(f"Renew filtered rows: {len(df_filtered)} for range {target_month_start} to {target_month_end}")
+            return len(df_filtered), df_filtered[fee_col].sum(), df_filtered
+        return 0, 0, pd.DataFrame()
+    except Exception as e:
+        logger.error(f"Renew sheet fetch error: {e}")
+        return 0, 0, pd.DataFrame()
 
-                    # Filter SALES1.TXT original columns natively output by metric_7
-                    cols_2 = ['Course Owner', 'Hot', 'Warm', 'Cold', 'Hot_Customer', 'Warm_Customer', 'Cold_Customer', 'HOT-CUSTOMER CONVERSION', 'WARM-CUSTOMER CONVERSION', 'COLD-CUSTOMER CONVERSION', 'Customer Count', 'Customer Revenue']
-                    display_df_2 = team_df[[c for c in cols_2 if c in team_df.columns]]
 
-                    st.dataframe(
-                        display_df_2.style.apply(highlight_total, axis=1).format({
-                            "Customer Revenue": "Rs.{:,.0f}",
-                            "Customer Count": "{:,.0f}",
-                            "Hot_Customer": "{:,.0f}",
-                            "Warm_Customer": "{:,.0f}",
-                            "Cold_Customer": "{:,.0f}",
-                            "HOT-CUSTOMER CONVERSION": "{:.1f}%",
-                            "WARM-CUSTOMER CONVERSION": "{:.1f}%",
-                            "COLD-CUSTOMER CONVERSION": "{:.1f}%"
-                        }),
-                        use_container_width=True
-                    )
-                    
-                    st.divider()
-            
-            else:
-                 st.info("No team data available.")
-                 
-        with tab13:
-            st.markdown('<div class="section-header"><h3> This month lead performance</h3></div>', unsafe_allow_html=True)
-            
-            if 'metric_4' in filtered_metrics and not filtered_metrics['metric_4'].empty:
-                team_results_3 = get_this_month_lead_performance(filtered_metrics['metric_4'])
-                
-                for team_name, team_df in team_results_3.items():
-                    if team_df.empty:
-                        continue
-                        
-                    st.markdown(f"#### {team_name}")
-                    
-                    def highlight_total(s):
-                        is_total = s['Course Owner'] == 'TOTAL'
-                        return ['background-color: #d4edda; font-weight: bold' if is_total else '' for _ in s]
+# ---------------- GOOGLE SHEETS (ADVOCATE) ----------------
+ADVOCATE_SHEET_URL = "https://script.google.com/macros/s/AKfycbyz-jowsvuW712EK6JFJu3OIR0PEAPWOv3cf-_RoMELmUtUzYTRNaY33qL62s4bBAo_cQ/exec"
 
-                    st.dataframe(
-                        team_df.style.apply(highlight_total, axis=1).format({
-                            "Deal %": "{:.1f}%",
-                            "Qualified Lead %": "{:.1f}%",
-                            "Lead->Deal %": "{:.1f}%",
-                            "Lead->Qualified Lead %": "{:.1f}%"
-                        }),
-                        use_container_width=True
-                    )
-                    
-                    st.divider()
-            else:
-                 st.info("No team data available.")
-        
-        # [OK] NEW: SECTION 14: Qualified Lead Drill-down
-        with tab14:
-            st.markdown('<div class="section-header"><h3> Qualified Lead Drill-down (CRM & Referrals)</h3></div>', unsafe_allow_html=True)
-            
-            ql_drilldown = create_qualified_lead_drilldown(filtered_df)
-            
-            if not ql_drilldown.empty:
-                st.markdown("#### Qualified Leads by Traffic Source & Referral Status")
-                
-                # Highlight CRM, Referral and TOTAL categories
-                def highlight_special_sources(s):
-                    is_special = str(s['Source Category']).upper() in ['CRM', 'REFERRAL']
-                    is_total = str(s['Source Category']).upper() == 'TOTAL'
-                    
-                    if is_total:
-                        return ['background-color: #d4edda; font-weight: bold' for _ in s]
-                    if is_special:
-                        return ['background-color: #e8f5e9; font-weight: bold' if is_special else '' for _ in s]
-                    return ['' for _ in s]
-                st.dataframe(
-                    ql_drilldown.style.apply(highlight_special_sources, axis=1),
-                    use_container_width=True
-                )
-                
-                # [OK] NEW: CRM Owner Breakdown Section
-                st.markdown("---")
-                st.markdown("#### CRM Qualified Leads by Course Owner")
-                crm_owner_breakdown = create_crm_owner_breakdown(st.session_state.contacts_df)
-                
-                if not crm_owner_breakdown.empty:
-                    def highlight_owner_total(s):
-                        if str(s['Course Owner']).upper() == 'TOTAL':
-                            return ['background-color: #d4edda; font-weight: bold' for _ in s]
-                        return ['' for _ in s]
-                        
-                    st.dataframe(
-                        crm_owner_breakdown.style.apply(highlight_owner_total, axis=1),
-                        use_container_width=True
-                    )
-                else:
-                    st.info("No CRM-sourced Qualified Lead data available for owner breakdown.")
-                
-                # Key Stats
-                # Sourcing directly from the TOTAL row to avoid doubling and logic errors
-                total_row = ql_drilldown[ql_drilldown['Source Category'] == 'TOTAL']
-                if not total_row.empty:
-                    total_ql = total_row['Total Qualified Leads'].iloc[0]
-                    referral_ql = total_row['Referral'].iloc[0]
-                else:
-                    total_row_fallback = ql_drilldown.iloc[-1] if not ql_drilldown.empty else None
-                    if total_row_fallback is not None:
-                        total_ql = total_row_fallback['Total Qualified Leads']
-                        referral_ql = total_row_fallback['Referral']
-                    else:
-                        total_ql = 0
-                        referral_ql = 0
-                
-                crm_row = ql_drilldown[ql_drilldown['Source Category'] == 'CRM']
-                crm_ql = crm_row['Total Qualified Leads'].sum() if not crm_row.empty else 0
-                
-                col_ql1, col_ql2, col_ql3 = st.columns(3)
-                with col_ql1:
-                    st.metric("Total Qualified Leads", f"{total_ql:,}")
-                with col_ql2:
-                    st.metric("From CRM", f"{crm_ql:,}", f"{crm_ql/total_ql*100:.1f}%" if total_ql > 0 else "0%")
-                with col_ql3:
-                    st.metric("From Referral", f"{referral_ql:,}", f"{referral_ql/total_ql*100:.1f}%" if total_ql > 0 else "0%")
-            else:
-                st.info("No Qualified Lead data available for the selected filters.")
-        
-        # SECTION 10: Month Comparison
-        with tab11:
-            st.markdown('<div class="section-header"><h3> Month Comparison (Current vs Previous)</h3></div>', unsafe_allow_html=True)
-            
-            if st.session_state.date_range:
-                current_start = datetime.strptime(st.session_state.date_range[0], "%Y-%m-%d").date()
-                current_end = datetime.strptime(st.session_state.date_range[1], "%Y-%m-%d").date()
-                
-                prev_start, prev_end = calculate_previous_period(current_start, current_end)
-                
-                st.info(f" Comparing **Current Period:** {current_start} to {current_end}  vs  **Previous Period:** {prev_start} to {prev_end}")
-                
-                # Fetch Button
-                if st.button(" Load Previous Period Data for Comparison", type="primary", use_container_width=True):
-                    with st.spinner("Fetching data for previous period..."):
-                        # Fetch Data for Previous Period
-                        prev_contacts, _ = fetch_hubspot_contacts_with_date_filter(
-                            api_key, st.session_state.date_filter, prev_start, prev_end
-                        )
-                        
-                        prev_deals, _ = fetch_hubspot_deals(
-                            api_key, prev_start, prev_end, st.session_state.customer_stage_ids
-                        )
-                        
-                        # Process Data (Load if either contacts or deals found)
-                        if prev_contacts or prev_deals:
-                            prev_df_contacts = process_contacts_data(prev_contacts, st.session_state.owner_mapping, api_key, start_date=prev_start, end_date=prev_end)
-                            prev_df_customers = process_deals_as_customers(prev_deals, st.session_state.owner_mapping, api_key, st.session_state.deal_stages, start_date=prev_start)
-                            
-                            # [OK] FILTER OUT EXCLUDED OWNERS (Previous Period)
-                            if prev_df_contacts is not None and not prev_df_contacts.empty:
-                                prev_df_contacts = prev_df_contacts[~prev_df_contacts['Course Owner'].isin(EXCLUDED_OWNERS)]
-                            
-                            if prev_df_customers is not None and not prev_df_customers.empty:
-                                prev_df_customers = prev_df_customers[~prev_df_customers['Course Owner'].isin(EXCLUDED_OWNERS)]
-                            
-                            # Calculate Metrics
-                            prev_metric_1 = create_metric_1(prev_df_contacts) # Course Data
-                            prev_metric_4 = create_metric_4(prev_df_contacts, prev_df_customers) # Owner Data
-                            
-                            st.session_state['prev_metric_1'] = prev_metric_1
-                            st.session_state['prev_metric_4'] = prev_metric_4
-                            st.session_state['prev_data_loaded'] = True
-                            st.success(" Previous period data loaded!")
-                        else:
-                            st.warning("No data found for previous period.")
-            
-            # Display Comparison if Loaded
-            if st.session_state.get('prev_data_loaded', False):
-                
-                # 1. Course Performance Comparison
-                st.markdown("###  Course Performance: This Month vs Previous")
-                
-                curr_metric_1 = filtered_metrics['metric_1'].copy()
-                prev_metric_1 = st.session_state.get('prev_metric_1', pd.DataFrame()).copy()
-                
-                if not curr_metric_1.empty and not prev_metric_1.empty:
-                    # Prepare comparison dataframe
-                    comp_data = []
-                    
-                    all_courses = set(curr_metric_1['Course'].unique()) | set(prev_metric_1['Course'].unique())
-                    
-                    for course in all_courses:
-                        # Current Logic
-                        curr_row = curr_metric_1[curr_metric_1['Course'] == course]
-                        curr_total = curr_row['Total'].values[0] if not curr_row.empty and 'Total' in curr_row.columns else 0
-                        # Calculate Deal % for Current
-                        curr_deals = 0
-                        if not curr_row.empty:
-                             for status in ['Hot', 'Warm', 'Cold']:
-                                 if status in curr_row.columns:
-                                     curr_deals += curr_row[status].values[0]
-                        curr_deal_pct = (curr_deals / curr_total * 100) if curr_total > 0 else 0
 
-                        # Previous Logic
-                        prev_row = prev_metric_1[prev_metric_1['Course'] == course]
-                        prev_total = prev_row['Total'].values[0] if not prev_row.empty and 'Total' in prev_row.columns else 0
-                        # Calculate Deal % for Previous
-                        prev_deals = 0
-                        if not prev_row.empty:
-                             for status in ['Hot', 'Warm', 'Cold']:
-                                 if status in prev_row.columns:
-                                     prev_deals += prev_row[status].values[0]
-                        prev_deal_pct = (prev_deals / prev_total * 100) if prev_total > 0 else 0
-                        
-                        comp_data.append({
-                            'Course': course,
-                            'Current Leads': curr_total,
-                            'Previous Leads': prev_total,
-                            'Lead Change': curr_total - prev_total,
-                            'Current Deal %': round(curr_deal_pct, 1),
-                            'Previous Deal %': round(prev_deal_pct, 1),
-                            'Deal % Change': round(curr_deal_pct - prev_deal_pct, 1)
-                        })
-                    
-                    comp_df = pd.DataFrame(comp_data)
-                    
-                    # Sort by volume
-                    comp_df = comp_df.sort_values('Current Leads', ascending=False)
-                    
-                    # Styling
-                    def highlight_change(val):
-                        color = 'green' if val > 0 else 'red' if val < 0 else 'black'
-                        return f'color: {color}; font-weight: bold'
-                    
-                    st.dataframe(
-                        comp_df.style.applymap(highlight_change, subset=['Lead Change', 'Deal % Change']),
-                        use_container_width=True
-                    )
-                else:
-                    st.info("Insufficient data for Comparison")
+@cache.memoize(timeout=600)
+def get_advocate_sheet_data():
+    """Fetch advocate data from Google Sheets. Returns list of dicts."""
+    if not ADVOCATE_SHEET_URL or "script.google.com" not in ADVOCATE_SHEET_URL:
+        return []
+    try:
+        response = requests.get(ADVOCATE_SHEET_URL, timeout=30)
+        data = response.json()
+        if isinstance(data, dict) and 'error' in data:
+            logger.error(f"Advocate sheet error: {data['error']}")
+            return []
+        return data
+    except Exception as e:
+        logger.error(f"Advocate sheet fetch error: {e}")
+        return []
 
-                st.divider()
 
-                # 2. Owner Performance Comparison
-                st.markdown("###  Owner Performance: This Month vs Previous")
-                
-                curr_metric_4 = filtered_metrics['metric_4'].copy()
-                prev_metric_4 = st.session_state.get('prev_metric_4', pd.DataFrame()).copy()
-                
-                if not curr_metric_4.empty and not prev_metric_4.empty:
-                     # Prepare comparison
-                    owner_comp_data = []
-                    
-                    all_owners = set(curr_metric_4['Course Owner'].unique()) | set(prev_metric_4['Course Owner'].unique())
-                    
-                    for owner in all_owners:
-                        # Current
-                        curr_row = curr_metric_4[curr_metric_4['Course Owner'] == owner]
-                        curr_leads = curr_row['Grand Total'].values[0] if not curr_row.empty and 'Grand Total' in curr_row.columns else 0
-                        curr_conv = curr_row['Lead->Customer %'].values[0] if not curr_row.empty and 'Lead->Customer %' in curr_row.columns else 0
-                        
-                        # Previous
-                        prev_row = prev_metric_4[prev_metric_4['Course Owner'] == owner]
-                        prev_leads = prev_row['Grand Total'].values[0] if not prev_row.empty and 'Grand Total' in prev_row.columns else 0
-                        prev_conv = prev_row['Lead->Customer %'].values[0] if not prev_row.empty and 'Lead->Customer %' in prev_row.columns else 0
-                        
-                        owner_comp_data.append({
-                            'Owner': owner,
-                            'Current Leads': curr_leads,
-                            'Prev Leads': prev_leads,
-                            'Lead Change': curr_leads - prev_leads,
-                            'Current Conv %': curr_conv,
-                            'Prev Conv %': prev_conv,
-                            'Conv % Change': round(curr_conv - prev_conv, 1)
-                        })
-                    
-                    owner_comp_df = pd.DataFrame(owner_comp_data)
-                    owner_comp_df = owner_comp_df.sort_values('Current Leads', ascending=False)
-                    
-                    # Styling
-                    def highlight_change(val):
-                        color = 'green' if val > 0 else 'red' if val < 0 else 'black'
-                        return f'color: {color}; font-weight: bold'
-                        
-                    st.dataframe(
-                        owner_comp_df.style.applymap(highlight_change, subset=['Lead Change', 'Conv % Change']),
-                        use_container_width=True
-                    )
-                else:
-                    st.info("Insufficient data for Owner Comparison")
+# ---------------- COURSE GROUPING ----------------
+# Map individual course variants to main course categories
+MAIN_COURSE_KEYWORDS = [
+    ("OET", ["oet"]),
+    ("PTE", ["pte", "pearson"]),
+    ("IELTS", ["ielts"]),
+    ("German", ["german"]),
+    ("Prometric", ["prometric"]),
+    ("Nclex-RN", ["nclex"]),
+    ("CBT", ["cbt"]),
+    ("DM", ["dm ", "digital marketing"]),
+    ("Fluency", ["fluency", "english fluency"]),
+    ("Media", ["media"]),
+    ("Yoga", ["yoga"]),
+    ("Prometric-Oman", ["prometric-oman", "prometric oman"]),
+]
+
+def get_main_course(course_name):
+    """Map individual course name to its main course category."""
+    if not course_name:
+        return "Other"
+    lower = course_name.lower().strip()
+    # Special case: Prometric-Oman before generic Prometric
+    if "oman" in lower and "prometric" in lower:
+        return "Prometric"
+    for main_name, keywords in MAIN_COURSE_KEYWORDS:
+        for kw in keywords:
+            if kw in lower:
+                return main_name
+    return course_name  # Return original if no match
+
+def group_course_breakdown(breakdown):
+    """Aggregate a course_breakdown dict {name: {count, revenue}} by main course category."""
+    grouped = {}
+    for course_name, info in breakdown.items():
+        main = get_main_course(course_name)
+        if main not in grouped:
+            grouped[main] = {"count": 0, "revenue": 0}
+        grouped[main]["count"] += info["count"]
+        grouped[main]["revenue"] += info["revenue"]
+    return grouped
+
+# ---------------- FLASK ROUTES ----------------
+@app.route('/')
+def index():
+    offset = request.args.get('offset', 0, type=int)
+    period = request.args.get('period', 'monthly')
+    c_start1 = request.args.get('c_start1')
+    c_end1 = request.args.get('c_end1')
+    c_start2 = request.args.get('c_start2')
+    c_end2 = request.args.get('c_end2')
+    m1_start, m1_end, m2_start, m2_end, date_obj = get_comparison_dates(offset, period, c_start1, c_end1, c_start2, c_end2)
     
+    if period == 'all':
+        main_label = "ALL TIME"
+        r1_label = f"{m1_start.strftime('%b %Y')} - {m1_end.strftime('%b %Y')}"
+        r2_label = "N/A"
+    elif period == 'quarterly':
+        q_num = (m1_start.month - 1) // 3 + 1
+        main_label = f"Q{q_num} {m1_start.year}"
+        r1_label = f"{m1_start.strftime('%b %d')} - {m1_end.strftime('%b %d')}"
+        r2_label = f"{m2_start.strftime('%b %d')} - {m2_end.strftime('%b %d')}"
+    elif period == 'custom':
+        main_label = "CUSTOM RANGE"
+        r1_label = f"{m1_start.strftime('%b %d, %Y')} - {m1_end.strftime('%b %d, %Y')}"
+        r2_label = f"{m2_start.strftime('%b %d, %Y')} - {m2_end.strftime('%b %d, %Y')}"
+    elif period == 'weekly':
+        main_label = f"Week of {m1_start.strftime('%b %d')}"
+        r1_label = f"{m1_start.strftime('%b %d')} - {m1_end.strftime('%b %d')}"
+        r2_label = f"{m2_start.strftime('%b %d')} - {m2_end.strftime('%b %d')}"
+    elif period == 'daily':
+        main_label = m1_start.strftime('%B %d, %Y')
+        r1_label = "Today" if offset == 0 else m1_start.strftime('%b %d')
+        r2_label = m2_start.strftime('%b %d')
     else:
-        # Welcome screen
-        st.markdown(
-            """
-            <div style='text-align: center; padding: 4rem;'>
-                <h1> HubSpot Business Performance Dashboard</h1>
-                <p style='font-size: 1.2rem; color: #666; margin-top: 1rem;'>
-                    Click <strong>"Fetch ALL Data"</strong> in the sidebar to generate the report.
-                </p>
-                <div style='margin-top: 3rem;'>
-                    <img src="https://cdn-icons-png.flaticon.com/512/2920/2920326.png" width="150" style="opacity: 0.5;">
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
+        main_label = m1_start.strftime('%B %Y')
+        r1_label = f"{m1_start.strftime('%b %d')} - {m1_end.strftime('%b %d')}"
+        r2_label = f"{m2_start.strftime('%b %d')} - {m2_end.strftime('%b %d')}"
+
+    return render_template(
+        'index.html',
+        active_users='—',
+        current_period=period,
+        current_month=main_label,
+        mtd_range=r1_label,
+        prev_range=r2_label,
+        month_offset=offset
+    )
+
+
+@app.route('/api/active-users')
+@cache.cached(timeout=30)
+def api_active_users():
+    return jsonify({"count": get_active_users()})
+
+
+@app.route('/api/discover')
+@cache.cached(timeout=300, query_string=True)
+def api_discover():
+    offset = request.args.get('offset', 0, type=int)
+    period = request.args.get('period', 'monthly')
+    c_start1 = request.args.get('c_start1')
+    c_end1 = request.args.get('c_end1')
+    c_start2 = request.args.get('c_start2')
+    c_end2 = request.args.get('c_end2')
+    m1_start, m1_end, m2_start, m2_end, _ = get_comparison_dates(offset, period, c_start1, c_end1, c_start2, c_end2)
+    m2_full_end = m1_start - timedelta(days=1)  # Full previous month for worm graph
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            f_m1 = executor.submit(get_discover_metrics, m1_start, m1_end)
+            f_m2 = executor.submit(get_discover_metrics, m2_start, m2_end)
+            f_trend = executor.submit(get_daily_new_users, m1_start, m1_end)
+            f_trend_prev = executor.submit(get_daily_new_users, m2_start, m2_full_end)
+
+        m1_val = f_m1.result()
+        m2_val = f_m2.result()
+        trend = f_trend.result()
+        trend_prev = f_trend_prev.result()
+        sources = get_traffic_sources(m1_start, m1_end)
+
+        delta = m1_val - m2_val
+        pct = (delta / m2_val * 100) if m2_val > 0 else 0
+
+        return jsonify({
+            "m1_val": f"{m1_val:,}",
+            "m2_val": f"{m2_val:,}",
+            "delta_pct": pct,
+            "trend": trend,
+            "worm_m1": calculate_cumulative(trend, "New Users"),
+            "worm_m2": calculate_cumulative(trend_prev, "New Users"),
+            "sources": sources.to_dict('records')
+        })
+    except Exception as e:
+        logger.error(f"API DISCOVER ERROR: {e}")
+        return jsonify({"error": "Failed to fetch discover metrics", "details": str(e)}), 500
+
+
+@app.route('/api/try')
+@cache.cached(timeout=300, query_string=True)
+def api_try():
+    """Return filtered lead and deal counts for the LEAD phase."""
+    offset = request.args.get('offset', 0, type=int)
+    period = request.args.get('period', 'monthly')
+    c_start1 = request.args.get('c_start1')
+    c_end1 = request.args.get('c_end1')
+    c_start2 = request.args.get('c_start2')
+    c_end2 = request.args.get('c_end2')
+    course = request.args.get('course')
+
+    m1_start, m1_end, m2_start, m2_end, _ = get_comparison_dates(offset, period, c_start1, c_end1, c_start2, c_end2)
+    m2_full_end = m1_start - timedelta(days=1)
+
+    try:
+        # Reuse the previous full-month contact snapshot for both previous MTD and full-month trend.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            f_m1_contacts = executor.submit(get_hubspot_lead_contacts, m1_start, m1_end)
+            f_m2_full_contacts = executor.submit(get_hubspot_lead_contacts, m2_start, m2_full_end)
+            f_m1_customers = executor.submit(get_hubspot_customer_count, m1_start, m1_end, course)
+            f_m2_customers = executor.submit(get_hubspot_customer_count, m2_start, m2_end, course)
+
+            m1_contacts = f_m1_contacts.result()
+            m2_full_contacts = f_m2_full_contacts.result()
+            m1_customer_count = f_m1_customers.result()
+            m2_customer_count = f_m2_customers.result()
+
+        r1 = _build_hubspot_lead_snapshot(m1_contacts, m1_start, m1_end, course_filter=course)
+        r2 = _build_hubspot_lead_snapshot(m2_full_contacts, m2_start, m2_end, course_filter=course)
+        r2_f = _build_hubspot_lead_snapshot(
+            m2_full_contacts,
+            m2_start,
+            m2_full_end,
+            course_filter=course,
+            include_status_metrics=False
         )
 
-if __name__ == "__main__":
-    main()
+        m1_leads = r1["total_leads"]
+        m1_deals = r1["deal_status_breakdown"].get("Hot", 0) + r1["deal_status_breakdown"].get("Warm", 0) + r1["deal_status_breakdown"].get("Cold", 0) + m1_customer_count
+        m1_trend = r1["trend"]
+
+        m2_leads = r2["total_leads"]
+        m2_deals = r2["deal_status_breakdown"].get("Hot", 0) + r2["deal_status_breakdown"].get("Warm", 0) + r2["deal_status_breakdown"].get("Cold", 0) + m2_customer_count
+
+        m2_trend = r2_f["trend"]
+
+        m1_course_breakdown = r1.get("course_breakdown", [])
+        m2_course_breakdown = r2.get("course_breakdown", [])
+        m1_deal_split = r1.get("deal_status_breakdown", {})
+        m2_deal_split = r2.get("deal_status_breakdown", {})
+    except Exception as e:
+        logger.error(f"API TRY ERROR: {e}")
+        return jsonify({"error": "Failed to fetch HubSpot leads", "details": str(e)}), 500
+
+    lead_delta = m1_leads - m2_leads
+    lead_pct = (lead_delta / m2_leads * 100) if m2_leads > 0 else 0
+    
+    deal_delta = m1_deals - m2_deals
+    deal_pct = (deal_delta / m2_deals * 100) if m2_deals > 0 else 0
+
+    return jsonify({
+        "m1_leads": m1_leads,
+        "m2_leads": m2_leads,
+        "lead_delta": f"{lead_delta:+}",
+        "lead_pct": round(lead_pct, 1),
+        "m1_deals": m1_deals,
+        "m2_deals": m2_deals,
+        "deal_delta": f"{deal_delta:+}",
+        "deal_pct": round(deal_pct, 1),
+        "m1_course_breakdown": m1_course_breakdown,
+        "m2_course_breakdown": m2_course_breakdown,
+        "m1_deal_split": m1_deal_split,
+        "m2_deal_split": m2_deal_split,
+        "m1_customer_count": m1_customer_count,
+        "m2_customer_count": m2_customer_count,
+        "worm_m1": calculate_cumulative(m1_trend, "Admissions"),
+        "worm_m2": calculate_cumulative(m2_trend, "Admissions"),
+        "trend": m1_trend
+    })
+
+
+@app.route('/api/buy')
+def api_buy():
+    offset = request.args.get('offset', 0, type=int)
+    period = request.args.get('period', 'monthly')
+    c_start1 = request.args.get('c_start1')
+    c_end1 = request.args.get('c_end1')
+    c_start2 = request.args.get('c_start2')
+    c_end2 = request.args.get('c_end2')
+    course = request.args.get('course')
+    m1_start, m1_end, m2_start, m2_end, _ = get_comparison_dates(offset, period, c_start1, c_end1, c_start2, c_end2)
+    m2_full_end = m1_start - timedelta(days=1)  # Full previous month end for worm graph
+
+    # Fetch HubSpot data concurrently for speed
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            f_m1 = executor.submit(get_hubspot_deals, m1_start, m1_end, course_filter=course)
+            f_m2 = executor.submit(get_hubspot_deals, m2_start, m2_end, course_filter=course)
+            f_m2_f = executor.submit(get_hubspot_deals, m2_start, m2_full_end, course_filter=course)
+            
+            m1_count, m1_val, m1_trend, m1_course_breakdown, m1_course_breakdown_ungrouped, m1_owner_breakdown = f_m1.result()
+            m2_count, m2_val, _, m2_course_breakdown, m2_course_breakdown_ungrouped, m2_owner_breakdown = f_m2.result()
+            _, _, m2_trend, _, _, _ = f_m2_f.result()
+    except Exception as e:
+        logger.error(f"API BUY ERROR: {e}")
+        return jsonify({"error": "Failed to fetch HubSpot data", "details": str(e)}), 500
+
+    delta_count = m1_count - m2_count
+    delta_val = m1_val - m2_val
+    pct_val = (delta_val / m2_val * 100) if m2_val > 0 else 0
+
+    # Merge this month + previous month course breakdown (already grouped at source)
+    all_courses = set(list(m1_course_breakdown.keys()) + list(m2_course_breakdown.keys()))
+    course_list = []
+    for course in all_courses:
+        m1_info = m1_course_breakdown.get(course, {"count": 0, "revenue": 0})
+        m2_info = m2_course_breakdown.get(course, {"count": 0, "revenue": 0})
+        course_list.append({
+            "course": course,
+            "m1_count": m1_info["count"],
+            "m1_revenue": m1_info["revenue"],
+            "m2_count": m2_info["count"],
+            "m2_revenue": m2_info["revenue"]
+        })
+    course_list.sort(key=lambda x: x["m1_count"], reverse=True)
+
+    # Merge this month + previous month course breakdown ungrouped
+    all_courses_ungrouped = set(list(m1_course_breakdown_ungrouped.keys()) + list(m2_course_breakdown_ungrouped.keys()))
+    course_list_ungrouped = []
+    for course in all_courses_ungrouped:
+        m1_info = m1_course_breakdown_ungrouped.get(course, {"count": 0, "revenue": 0})
+        m2_info = m2_course_breakdown_ungrouped.get(course, {"count": 0, "revenue": 0})
+        course_list_ungrouped.append({
+            "course": course,
+            "m1_count": m1_info["count"],
+            "m1_revenue": m1_info["revenue"],
+            "m2_count": m2_info["count"],
+            "m2_revenue": m2_info["revenue"]
+        })
+    course_list_ungrouped.sort(key=lambda x: x["m1_count"], reverse=True)
+
+    # Merge this month + previous month owner breakdown
+    all_owners = set(list(m1_owner_breakdown.keys()) + list(m2_owner_breakdown.keys()))
+    owner_list = []
+    for owner in all_owners:
+        m1_info = m1_owner_breakdown.get(owner, {"count": 0, "revenue": 0})
+        m2_info = m2_owner_breakdown.get(owner, {"count": 0, "revenue": 0})
+        owner_list.append({
+            "owner": owner,
+            "m1_count": m1_info["count"],
+            "m1_revenue": m1_info["revenue"],
+            "m2_count": m2_info["count"],
+            "m2_revenue": m2_info["revenue"]
+        })
+    owner_list.sort(key=lambda x: x["m1_count"], reverse=True)
+
+    return jsonify({
+        "m1_count": m1_count,
+        "m1_val": f"₹{m1_val:,.0f}",
+        "m2_count": m2_count,
+        "m2_val": f"₹{m2_val:,.0f}",
+        "delta_count": f"{delta_count:+}",
+        "pct_val": pct_val,
+        "worm_m1": calculate_cumulative(m1_trend, "Count"),
+        "worm_m2": calculate_cumulative(m2_trend, "Count"),
+        "course_breakdown": course_list,
+        "course_breakdown_ungrouped": course_list_ungrouped,
+        "owner_breakdown": owner_list
+    })
+
+
+@app.route('/api/use')
+def api_use():
+    offset = request.args.get('offset', 0, type=int)
+    period = request.args.get('period', 'monthly')
+    c_start1 = request.args.get('c_start1')
+    c_end1 = request.args.get('c_end1')
+    c_start2 = request.args.get('c_start2')
+    c_end2 = request.args.get('c_end2')
+    course = request.args.get('course')
+    m1_start, m1_end, m2_start, m2_end, _ = get_comparison_dates(offset, period, c_start1, c_end1, c_start2, c_end2)
+    m2_full_end = m1_start - timedelta(days=1)  # Full previous month end for worm graph
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        f_m1_cust = executor.submit(get_kajabi_new_customers, m1_start, m1_end)
+        f_m2_cust = executor.submit(get_kajabi_new_customers, m2_start, m2_end)          # MTD count for KPI
+        f_m2_cust_full = executor.submit(get_kajabi_new_customers, m2_start, m2_full_end) # Full month for graph
+        f_m1_sales = executor.submit(get_kajabi_sales, m1_start, m1_end)
+        f_m2_sales = executor.submit(get_kajabi_sales, m2_start, m2_end)
+        f_prod = executor.submit(get_kajabi_products)
+        f_active = executor.submit(get_kajabi_active_customers, m1_start)
+        f_offers = executor.submit(get_kajabi_offers)
+
+    m1_count, m1_list, total, m1_trend = f_m1_cust.result()
+    m2_count, _, _, _ = f_m2_cust.result()          # KPI: MTD count only
+    _, _, _, m2_trend = f_m2_cust_full.result()      # Graph: full previous month trend
+    m1_rev, _ = f_m1_sales.result()
+    m2_rev, _ = f_m2_sales.result()
+    products = f_prod.result()
+    active, _ = f_active.result()
+    offers_map = f_offers.result()
+
+    # Build MTD course enrollment counts with FILTERING
+    offer_counts = {}
+    filtered_m1_list = []
+    for c in m1_list:
+        match = False
+        row_offers = []
+        for o_item in c.get('relationships', {}).get('offers', {}).get('data', []):
+            oid = o_item.get('id')
+            if oid:
+                name = offers_map.get(oid, f"Offer {oid}")
+                main = get_main_course(name)
+                if course and main.lower() != course.lower():
+                    continue
+                match = True
+                offer_counts[name] = offer_counts.get(name, 0) + 1
+        if not course or match:
+            filtered_m1_list.append(c)
+
+    mtd_courses = sorted(
+        [{"Course": k, "Enrollments": v} for k, v in offer_counts.items()],
+        key=lambda x: x['Enrollments'],
+        reverse=True
+    )[:10]
+
+    if course:
+        # Re-calculate count based on filter
+        m1_count = len(filtered_m1_list)
+        # Revenue filtering is harder without sale-level course info,
+        # but we can estimate or leave as is if not available.
+        pass
+
+    delta_count = m1_count - m2_count
+    delta_rev = m1_rev - m2_rev
+
+    return jsonify({
+        "total_customers": f"{total:,}",
+        "m1_new": m1_count,
+        "new_delta": f"{delta_count:+}",
+        "m2_new": m2_count,
+        "m1_rev": f"₹{m1_rev:,.2f}",
+        "rev_delta": f"₹{delta_rev:,.2f}",
+        "active_learners": f"{active:,}",
+        "products": sorted(products, key=lambda x: x['Members'], reverse=True)[:10],
+        "mtd_courses": mtd_courses,
+        "worm_m1": calculate_cumulative(m1_trend, "Count"),
+        "worm_m2": calculate_cumulative(m2_trend, "Count")
+    })
+
+
+@app.route('/api/renew')
+def api_renew():
+    offset = request.args.get('offset', 0, type=int)
+    period = request.args.get('period', 'monthly')
+    c_start1 = request.args.get('c_start1')
+    c_end1 = request.args.get('c_end1')
+    c_start2 = request.args.get('c_start2')
+    c_end2 = request.args.get('c_end2')
+    course = request.args.get('course')
+    m1_start, m1_end, m2_start, m2_end, _ = get_comparison_dates(offset, period, c_start1, c_end1, c_start2, c_end2)
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        f_m1 = executor.submit(get_renew_sheet_data, m1_start, m1_end, course_filter=course)
+        f_m2 = executor.submit(get_renew_sheet_data, m2_start, m2_end, course_filter=course)
+
+    m1_count, m1_val, m1_df = f_m1.result()
+    m2_count, m2_val, m2_df = f_m2.result()
+
+    delta_count = m1_count - m2_count
+    delta_val = m1_val - m2_val
+    pct_val = (delta_val / m2_val * 100) if m2_val > 0 else 0
+
+    recent = []
+
+    def get_sanitized_breakdown(df, col):
+        if df.empty or col not in df.columns:
+            return []
+        s = df[col].astype(str).str.strip().str.upper()
+        counts = s.value_counts().to_dict()
+        items = [{"name": str(k), "count": int(v)} for k, v in counts.items()]
+        items.sort(key=lambda x: x["count"], reverse=True)
+        return items
+
+    m1_courses = get_sanitized_breakdown(m1_df, "Course")
+    m2_courses = get_sanitized_breakdown(m2_df, "Course")
+    m1_packages = get_sanitized_breakdown(m1_df, "Package")
+    m2_packages = get_sanitized_breakdown(m2_df, "Package")
+
+    if not m1_df.empty:
+        # Columns: Student Name, Course, Package, Lead Owner, Fee Amount, Paid Amount, Pending Amount, Payment Paid Date/ Initial Amount Paid Date, Pending Paid Date
+        cols_to_show = ["Student Name", "Course", "Package", "Lead Owner", "Fee Amount", "Paid Amount", "Pending Amount", "Payment Paid Date/ Initial Amount Paid Date", "Pending Paid Date"]
+        # Filter to only existing columns to avoid errors
+        available_cols = [c for c in cols_to_show if c in m1_df.columns]
+        recent = m1_df[available_cols].to_dict('records')
+
+    return jsonify({
+        "m1_count": m1_count,
+        "m1_val": f"₹{m1_val:,.0f}",
+        "m2_count": m2_count,
+        "m2_val": f"₹{m2_val:,.0f}",
+        "delta_count": f"{delta_count:+}",
+        "pct_val": pct_val,
+        "recent_renewals": recent,
+        "m1_course_breakdown": m1_courses,
+        "m2_course_breakdown": m2_courses,
+        "m1_package_breakdown": m1_packages,
+        "m2_package_breakdown": m2_packages,
+        "v": "2.3"
+    })
+
+
+def _parse_advocate_passout(row):
+    """Parse PASS OUT MONTH + PASS OUT DATE into a (year, month_num, date_obj, month_label) tuple."""
+    import re, calendar
+    month_str = (row.get("PASS OUT MONTH") or "").strip().upper()
+    date_str = (row.get("PASS OUT DATE") or "").strip()
+
+    # Map month name → number
+    month_map = {m.upper(): i for i, m in enumerate(calendar.month_name) if m}
+    # Also handle abbreviations
+    month_map.update({m.upper(): i for i, m in enumerate(calendar.month_abbr) if m})
+
+    month_num = None
+    year = None
+
+    # Try to extract month from PASS OUT MONTH (e.g. "February", "JANUARY", "January 2026", "Feb 2026")
+    if month_str:
+        parts = month_str.split()
+        for p in parts:
+            if p in month_map:
+                month_num = month_map[p]
+            elif p.isdigit() and len(p) == 4:
+                year = int(p)
+
+    # Try to parse date for a more precise date and to extract year if missing
+    date_obj = None
+    if date_str:
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%b %d", "%d %b", "%d %b %Y"):
+            try:
+                date_obj = datetime.strptime(date_str, fmt)
+                if date_obj.year < 2000:
+                    # Format didn't include year; we'll fill it from context
+                    date_obj = None
+                else:
+                    if not year:
+                        year = date_obj.year
+                    if not month_num:
+                        month_num = date_obj.month
+                break
+            except ValueError:
+                continue
+        # Also try raw date patterns like "Feb 7", "14/02/2026", "Jan 18"
+        if not date_obj and date_str:
+            match = re.search(r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})', date_str)
+            if match:
+                d, m, y = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                if y < 100: y += 2000
+                try:
+                    date_obj = datetime(y, m, d)
+                    if not year: year = y
+                    if not month_num: month_num = m
+                except ValueError:
+                    try:
+                        date_obj = datetime(y, d, m)  # Try swapped day/month
+                        if not year: year = y
+                        if not month_num: month_num = m
+                    except ValueError:
+                        pass
+
+    # Default year to current year if still missing
+    if not year:
+        year = datetime.now().year
+
+    # Build month label
+    if month_num:
+        month_label = f"{calendar.month_name[month_num].upper()} {year}"
+    else:
+        month_label = "UNKNOWN"
+
+    return year, month_num, date_obj, month_label
+
+
+@app.route('/api/advocate')
+@cache.cached(timeout=300, query_string=True)
+def api_advocate():
+    import calendar
+    offset = request.args.get('offset', 0, type=int)
+    period = request.args.get('period', 'monthly')
+    c_start1 = request.args.get('c_start1')
+    c_end1 = request.args.get('c_end1')
+    c_start2 = request.args.get('c_start2')
+    c_end2 = request.args.get('c_end2')
+    course = request.args.get('course')
+    m1_start, m1_end, m2_start, m2_end, _ = get_comparison_dates(offset, period, c_start1, c_end1, c_start2, c_end2)
+
+    raw_data = get_advocate_sheet_data()
+    if not raw_data:
+        return jsonify({"m1_total": 0, "m2_total": 0, "delta": "+0", "breakdown": [], "recent": []})
+
+    # FILTERING BY COURSE
+    if course:
+        raw_data = [r for r in raw_data if get_main_course(str(r.get("COURSE", ""))).lower() == course.lower()]
+
+    # Enrich every row with parsed pass-out info
+    enriched = []
+    for r in raw_data:
+        yr, mn, dt, label = _parse_advocate_passout(r)
+        r['_passout_year'] = yr
+        r['_passout_month_num'] = mn
+        r['_passout_date_obj'] = dt.isoformat() if dt else None
+        r['_passout_label'] = label
+        r['_sort_key'] = dt.isoformat() if dt else f"{yr}-{mn or 0:02d}-00"
+        enriched.append(r)
+
+    target_year = m1_start.year
+    target_month = m1_start.month
+    prev_year = m2_start.year
+    prev_month = m2_start.month
+
+    if period == 'all':
+        rows_this_month = enriched
+        rows_prev_month = []
+    else:
+        m1_s = m1_start.strftime('%Y-%m-%d')
+        m1_e = m1_end.strftime('%Y-%m-%d')
+        m2_s = m2_start.strftime('%Y-%m-%d')
+        m2_e = m2_end.strftime('%Y-%m-%d')
+        
+        # We need to elegantly handle rows that have NO exact date, only a Month/Year
+        # BUT since user specifically asked for "this date MTD", we will stick to exact date matching.
+        rows_this_month = [r for r in enriched if r['_passout_date_obj'] and m1_s <= r['_passout_date_obj'][:10] <= m1_e]
+        rows_prev_month = [r for r in enriched if r['_passout_date_obj'] and m2_s <= r['_passout_date_obj'][:10] <= m2_e]
+
+    # --- KPIs for this month ---
+    total = len(rows_this_month)
+    prev_total = len(rows_prev_month)
+    branch_counts = {}
+    advocacy_levels = {}
+    testimonials_given = 0
+    testimonials_not = 0
+    course_counts = {}
+
+    for r in rows_this_month:
+        branch = r.get("Branch", "Unknown")
+        branch_counts[branch] = branch_counts.get(branch, 0) + 1
+
+        level = (r.get("ADVOCACY LEVEL") or "").strip()
+        if level:
+            advocacy_levels[level] = advocacy_levels.get(level, 0) + 1
+
+        testimonial = (r.get("TESTIMONIALS (GIVEN/NOT)") or "").strip().upper()
+        if "GIVEN" in testimonial and "NOT" not in testimonial:
+            testimonials_given += 1
+        elif testimonial:
+            testimonials_not += 1
+
+        course = (r.get("COURSE") or "").strip()
+        if course:
+            course_counts[course] = course_counts.get(course, 0) + 1
+
+    # --- KPIs for previous month ---
+    prev_branch_counts = {}
+    prev_advocacy_levels = {}
+    prev_testimonials_given = 0
+    prev_testimonials_not = 0
+    prev_course_counts = {}
+
+    for r in rows_prev_month:
+        branch = r.get("Branch", "Unknown")
+        prev_branch_counts[branch] = prev_branch_counts.get(branch, 0) + 1
+
+        level = (r.get("ADVOCACY LEVEL") or "").strip()
+        if level:
+            prev_advocacy_levels[level] = prev_advocacy_levels.get(level, 0) + 1
+
+        testimonial = (r.get("TESTIMONIALS (GIVEN/NOT)") or "").strip().upper()
+        if "GIVEN" in testimonial and "NOT" not in testimonial:
+            prev_testimonials_given += 1
+        elif testimonial:
+            prev_testimonials_not += 1
+
+        course = (r.get("COURSE") or "").strip()
+        if course:
+            prev_course_counts[course] = prev_course_counts.get(course, 0) + 1
+
+    sorted_levels = sorted(advocacy_levels.items(), key=lambda x: x[1], reverse=True)
+    sorted_courses = sorted(course_counts.items(), key=lambda x: x[1], reverse=True)
+
+    # Sort rows by date descending within this month
+    rows_this_month.sort(key=lambda r: r['_sort_key'], reverse=True)
+
+    # Build month_groups for ALL months (for the full grouped view)
+    month_groups_map = {}
+    for r in enriched:
+        label = r['_passout_label']
+        if label not in month_groups_map:
+            month_groups_map[label] = {"month": label, "year": r['_passout_year'], "month_num": r['_passout_month_num'] or 0, "rows": []}
+        # Strip internal fields for clean JSON
+        clean = {k: v for k, v in r.items() if not k.startswith('_')}
+        clean['_sort_key'] = r['_sort_key']
+        clean['_passout_date_obj'] = r['_passout_date_obj']
+        month_groups_map[label]["rows"].append(clean)
+
+    # Sort groups by year desc, month desc
+    month_groups = sorted(month_groups_map.values(), key=lambda g: (g['year'], g['month_num']), reverse=True)
+    for g in month_groups:
+        g['rows'].sort(key=lambda r: r.get('_sort_key', ''), reverse=True)
+        g['count'] = len(g['rows'])
+
+    # Clean rows for this month too
+    clean_rows = []
+    for r in rows_this_month:
+        clean = {k: v for k, v in r.items() if not k.startswith('_')}
+        clean['_sort_key'] = r['_sort_key']
+        clean['_passout_date_obj'] = r['_passout_date_obj']
+        clean_rows.append(clean)
+
+    return jsonify({
+        "total": total,
+        "prev_total": prev_total,
+        "branch_counts": [{"name": k, "count": v} for k, v in sorted(branch_counts.items())],
+        "prev_branch_counts": [{"name": k, "count": v} for k, v in sorted(prev_branch_counts.items())],
+        "advocacy_levels": [{"level": k, "count": v} for k, v in sorted_levels],
+        "testimonials_given": testimonials_given,
+        "testimonials_not": testimonials_not,
+        "prev_testimonials_given": prev_testimonials_given,
+        "prev_testimonials_not": prev_testimonials_not,
+        "course_breakdown": [{"name": k, "count": v} for k, v in sorted_courses],
+        "rows": clean_rows,
+        "all_rows": [r2 for g in month_groups for r2 in g['rows']],
+        "month_groups": month_groups,
+        "target_month_label": f"{calendar.month_name[target_month].upper()} {target_year}",
+        "prev_month_label": f"{calendar.month_name[prev_month].upper()} {prev_year}",
+    })
+
+
+@app.route('/api/cache-clear', methods=['POST'])
+def api_cache_clear():
+    cache.clear()
+    logger.info("Cache cleared via refresh button")
+    return jsonify({"status": "ok"})
+
+
+# ---------------- CONTENT CALENDAR ----------------
+@cache.memoize(timeout=1800)
+def get_content_calendar():
+    """Fetch all content calendar rows from Google Apps Script."""
+    try:
+        resp = requests.get(CONTENT_CALENDAR_URL, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Content calendar fetch error: {e}")
+        return []
+
+
+
+
+@app.route('/api/content-calendar')
+@cache.cached(timeout=300, query_string=True)
+def api_content_calendar():
+    """Return content calendar KPIs filtered to the requested month (full month range)."""
+    offset = request.args.get('offset', 0, type=int)
+    period = request.args.get('period', 'monthly')
+    c_start1 = request.args.get('c_start1')
+    c_end1 = request.args.get('c_end1')
+    c_start2 = request.args.get('c_start2')
+    c_end2 = request.args.get('c_end2')
+    course = request.args.get('course')
+    ist = pytz.timezone("Asia/Kolkata")
+    m1_start, m1_end, m2_start, m2_end, _ = get_comparison_dates(offset, period, c_start1, c_end1, c_start2, c_end2)
+
+    if period == 'monthly' and not c_start1:
+        if m1_end.month == 12:
+            m1_end = m1_end.replace(month=1, year=m1_end.year+1, day=1) - timedelta(days=1)
+        else:
+            m1_end = (m1_end.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+
+    all_rows = get_content_calendar()
+
+    # FILTERING BY COURSE
+    if course:
+        all_rows = [r for r in all_rows if get_main_course(str(r.get("Sheet", ""))).lower() == course.lower()]
+
+    STATUS_MAP = {
+        "published": "Published",
+        "pending":   "Pending",
+        "assigned":  "Assigned",
+        "":          "Unset",
+    }
+    FUNNEL_ORDER = ["Awareness", "Consideration", "Conversion", "Retention"]
+
+    rows_this_month = []
+    for row in all_rows:
+        if not any([row.get("Content Topic"), row.get("Status"), row.get("Scheduled Date"), row.get("Owner/TUTOR")]):
+            continue
+
+        date_val = row.get("Published Date") or row.get("Scheduled Date") or ""
+        parsed_date = None
+        if date_val:
+            try:
+                date_val_clean = date_val.split('(')[0].strip()
+                import re as _re
+                date_val_clean = _re.sub(r',?\s*(MON|TUE|WED|THRS|THU|FRI|SAT|SUN)\s*$', '', date_val_clean, flags=_re.IGNORECASE).strip()
+                parsed_date = pd.to_datetime(date_val_clean, errors='coerce', dayfirst=False)
+                if pd.isna(parsed_date):
+                    parsed_date = None
+                else:
+                    parsed_date = parsed_date.date()
+            except Exception:
+                parsed_date = None
+
+        if parsed_date and not (m1_start <= parsed_date <= m1_end):
+            continue
+        
+        if not parsed_date:
+            continue
+
+        status_raw = (row.get("Status") or "").strip().lower()
+        status = STATUS_MAP.get(status_raw, row.get("Status", "Other").strip())
+
+        # [FIX] If status column is empty, but there is a Published Date, infer that it is Published
+        if (status == "Unset" or status == "Other") and row.get("Published Date") and str(row.get("Published Date")).strip():
+            status = "Published"
+
+        funnel_raw = (row.get("Funnel Stage") or "").strip().lower()
+        if "awareness" in funnel_raw:
+            funnel = "Awareness"
+        elif "consideration" in funnel_raw:
+            funnel = "Consideration"
+        elif "conversion" in funnel_raw:
+            funnel = "Conversion"
+        elif "retention" in funnel_raw:
+            funnel = "Retention"
+        else:
+            funnel = "Other"
+
+        rows_this_month.append({
+            "sheet":       row.get("Sheet", "").strip(),
+            "topic":       row.get("Content Topic", ""),
+            "type":        row.get("Content Type", ""),
+            "owner":       row.get("Owner/TUTOR", ""),
+            "status":      status,
+            "funnel":      funnel,
+            "date":        parsed_date.isoformat() if parsed_date else "",
+            "link_yt":     row.get("Link YT", ""),
+            "link_insta":  row.get("Link INSTA", ""),
+            "link_fb":     row.get("Link FB", ""),
+            "remarks":     row.get("REMARKS", ""),
+        })
+
+    total      = len(rows_this_month)
+    published  = sum(1 for r in rows_this_month if r["status"] == "Published")
+    pending    = sum(1 for r in rows_this_month if r["status"] == "Pending")
+    assigned   = sum(1 for r in rows_this_month if r["status"] == "Assigned")
+    publish_rate = round(published / total * 100) if total > 0 else 0
+
+    course_summary = {}
+    for r in rows_this_month:
+        s = r["sheet"]
+        if s not in course_summary:
+            course_summary[s] = {"total": 0, "published": 0, "pending": 0}
+        course_summary[s]["total"] += 1
+        if r["status"] == "Published":
+            course_summary[s]["published"] += 1
+        elif r["status"] == "Pending":
+            course_summary[s]["pending"] += 1
+
+    funnel_summary = {}
+    for r in rows_this_month:
+        f = r["funnel"]
+        funnel_summary[f] = funnel_summary.get(f, 0) + 1
+
+    return jsonify({
+        "total":        total,
+        "published":    published,
+        "pending":      pending,
+        "assigned":     assigned,
+        "publish_rate": publish_rate,
+        "courses":      [{"name": k, **v} for k, v in sorted(course_summary.items())],
+        "funnel":       [{"stage": f, "count": funnel_summary.get(f, 0)} for f in FUNNEL_ORDER if f in funnel_summary],
+        "rows":         rows_this_month,
+    })
+
+
+import threading
+
+def _prewarm_lead_dashboard(m1_start, m1_end, m2_start, m2_end, m2_full_end):
+    """Warm the heavy LEAD caches for the default monthly dashboard view."""
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            f_m1_contacts = ex.submit(get_hubspot_lead_contacts, m1_start, m1_end)
+            f_m2_full_contacts = ex.submit(get_hubspot_lead_contacts, m2_start, m2_full_end)
+            f_m1_customers = ex.submit(get_hubspot_customer_count, m1_start, m1_end, None)
+            f_m2_customers = ex.submit(get_hubspot_customer_count, m2_start, m2_end, None)
+
+            m1_contacts = f_m1_contacts.result()
+            m2_full_contacts = f_m2_full_contacts.result()
+            f_m1_customers.result()
+            f_m2_customers.result()
+
+        _build_hubspot_lead_snapshot(m1_contacts, m1_start, m1_end)
+        _build_hubspot_lead_snapshot(m2_full_contacts, m2_start, m2_end)
+        _build_hubspot_lead_snapshot(
+            m2_full_contacts,
+            m2_start,
+            m2_full_end,
+            include_status_metrics=False
+        )
+        logger.info("WARMUP: lead dashboard cache ready")
+    except Exception as e:
+        logger.warning(f"WARMUP lead error (non-fatal): {e}")
+
+def _warmup():
+    """Pre-warm all data caches in background so first browser hit is instant."""
+    import time
+    time.sleep(3)  # Wait for Flask to fully start
+    try:
+        m1_start, m1_end, m2_start, m2_end, _ = get_comparison_dates(0)
+        m2_full_end = m1_start - timedelta(days=1)
+        logger.info("WARMUP: pre-fetching all data sources...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+            # DISCOVER — GA4 (Can be parallel)
+            ex.submit(get_discover_metrics, m1_start, m1_end)
+            ex.submit(get_discover_metrics, m2_start, m2_end)
+            ex.submit(get_daily_new_users, m1_start, m1_end)
+            ex.submit(get_daily_new_users, m2_start, m2_full_end)
+            ex.submit(get_traffic_sources, m1_start, m1_end)
+            
+            # USE — Kajabi (Can be parallel)
+            ex.submit(get_kajabi_new_customers, m1_start, m1_end)
+            ex.submit(get_kajabi_new_customers, m2_start, m2_end)
+            ex.submit(get_kajabi_new_customers, m2_start, m2_full_end)
+            ex.submit(get_kajabi_sales, m1_start, m1_end)
+            ex.submit(get_kajabi_sales, m2_start, m2_end)
+            ex.submit(get_kajabi_products)
+            ex.submit(get_kajabi_active_customers, m1_start)
+            ex.submit(get_kajabi_offers)
+            
+            # RENEW & Content Calendar (Can be parallel)
+            ex.submit(get_renew_sheet_data, m1_start, m1_end)
+            ex.submit(get_renew_sheet_data, m2_start, m2_end)
+            ex.submit(get_content_calendar)
+            ex.submit(_prewarm_lead_dashboard, m1_start, m1_end, m2_start, m2_end, m2_full_end)
+
+        logger.info("WARMUP: base caches ready (LEAD prewarm continues in background if needed)")
+    except Exception as e:
+        logger.warning(f"WARMUP error (non-fatal): {e}")
+
+
+if __name__ == '__main__':
+    threading.Thread(target=_warmup, daemon=True).start()
+    port = int(os.environ.get('PORT', 5001))
+    app.run(debug=False, host='0.0.0.0', port=port, use_reloader=False)
