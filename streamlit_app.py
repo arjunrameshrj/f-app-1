@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta, date
 import pytz
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import io
 import numpy as np
@@ -2015,53 +2016,8 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
         "Content-Type": "application/json"
     }
     
-    start_timestamp = date_to_hubspot_timestamp(start_date, is_end_date=False)
-    safe_end_date = end_date + timedelta(days=1)
-    end_timestamp = date_to_hubspot_timestamp(safe_end_date, is_end_date=False)
-    
-    all_contacts = []
-    after = None
-    
-    # Build filter
-    # Build filter based on selected field
-    if date_field == "Created Date":
-        filter_groups = [
-            {
-                "filters": [
-                    {"propertyName": "createdate", "operator": "GTE", "value": start_timestamp},
-                    {"propertyName": "createdate", "operator": "LTE", "value": end_timestamp}
-                ]
-            }
-        ]
-    elif date_field == "Last Modified Date":
-        filter_groups = [
-            {
-                "filters": [
-                    {"propertyName": "lastmodifieddate", "operator": "GTE", "value": start_timestamp},
-                    {"propertyName": "lastmodifieddate", "operator": "LTE", "value": end_timestamp}
-                ]
-            }
-        ]
-    else:
-        # Both Created and Last Modified
-        filter_groups = [
-            {
-                "filters": [
-                    {"propertyName": "createdate", "operator": "GTE", "value": start_timestamp},
-                    {"propertyName": "createdate", "operator": "LTE", "value": end_timestamp}
-                ]
-            },
-            {
-                "filters": [
-                    {"propertyName": "lastmodifieddate", "operator": "GTE", "value": start_timestamp},
-                    {"propertyName": "lastmodifieddate", "operator": "LTE", "value": end_timestamp}
-                ]
-            }
-        ]
-    
     url = f"{HUBSPOT_API_BASE}/crm/v3/objects/contacts/search"
     
-    # Define properties - REMOVE lifecycle stage
     all_properties = [
         "hs_lead_status", "lead_status", 
         "hubspot_owner_id", "hs_assigned_owner_id",
@@ -2075,7 +2031,44 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
         "hs_analytics_source_data_1", "refferal_lead_", "refferred_by", "servicecustomer"
     ]
     
-    try:
+    all_contacts = []
+    
+    date_chunks = []
+    curr_start = start_date
+    while curr_start <= end_date:
+        curr_end = min(curr_start + timedelta(days=35), end_date)
+        date_chunks.append((curr_start, curr_end))
+        curr_start = curr_end + timedelta(days=1)
+        
+    def fetch_chunk(chunk_start, chunk_end):
+        chunk_contacts = []
+        start_timestamp = date_to_hubspot_timestamp(chunk_start, is_end_date=False)
+        safe_end_date = chunk_end + timedelta(days=1)
+        end_timestamp = date_to_hubspot_timestamp(safe_end_date, is_end_date=False)
+        
+        if date_field == "Created Date":
+            filter_groups = [{"filters": [
+                {"propertyName": "createdate", "operator": "GTE", "value": start_timestamp},
+                {"propertyName": "createdate", "operator": "LTE", "value": end_timestamp}
+            ]}]
+        elif date_field == "Last Modified Date":
+            filter_groups = [{"filters": [
+                {"propertyName": "lastmodifieddate", "operator": "GTE", "value": start_timestamp},
+                {"propertyName": "lastmodifieddate", "operator": "LTE", "value": end_timestamp}
+            ]}]
+        else:
+            filter_groups = [
+                {"filters": [
+                    {"propertyName": "createdate", "operator": "GTE", "value": start_timestamp},
+                    {"propertyName": "createdate", "operator": "LTE", "value": end_timestamp}
+                ]},
+                {"filters": [
+                    {"propertyName": "lastmodifieddate", "operator": "GTE", "value": start_timestamp},
+                    {"propertyName": "lastmodifieddate", "operator": "LTE", "value": end_timestamp}
+                ]}
+            ]
+        
+        after = None
         while True:
             body = {
                 "filterGroups": filter_groups,
@@ -2087,40 +2080,37 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
                     "direction": "ASCENDING"
                 }]
             }
+            if after: body["after"] = after
             
-            if after:
-                body["after"] = after
-            
-            response = requests.post(url, headers=headers, json=body, timeout=30)
-            
-            if response.status_code == 429:
-                time.sleep(10)
-                continue
-            
-            response.raise_for_status()
-            data = response.json()
-            
-            batch_contacts = data.get("results", [])
-            
-            if batch_contacts:
-                all_contacts.extend(batch_contacts)
-                paging_info = data.get("paging", {})
-                after = paging_info.get("next", {}).get("after")
-                
-                if not after:
+            try:
+                response = requests.post(url, headers=headers, json=body, timeout=30)
+                if response.status_code == 429:
+                    time.sleep(3)
+                    continue
+                if response.status_code == 400:
                     break
-                
-                time.sleep(0.1)
-            else:
+                response.raise_for_status()
+                data = response.json()
+                batch = data.get("results", [])
+                if batch:
+                    chunk_contacts.extend(batch)
+                    after = data.get("paging", {}).get("next", {}).get("after")
+                    if not after:
+                        break
+                else:
+                    break
+            except Exception:
                 break
-        
+        return chunk_contacts
+
+    try:
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_chunk = {executor.submit(fetch_chunk, start, end): (start, end) for start, end in date_chunks}
+            for future in as_completed(future_to_chunk):
+                all_contacts.extend(future.result())
         return all_contacts, len(all_contacts)
-        
-    except requests.exceptions.RequestException as e:
-        st.error(f" Error fetching contacts: {e}")
-        return [], 0
     except Exception as e:
-        st.error(f" Unexpected error: {e}")
+        st.error(f" Error fetching contacts: {e}")
         return [], 0
 
 # [OK] Fetch DEALS using CORRECT Stage IDs
@@ -2136,59 +2126,39 @@ def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
         "Content-Type": "application/json"
     }
     
-    start_timestamp = date_to_hubspot_timestamp(start_date, is_end_date=False)
-    end_timestamp = date_to_hubspot_timestamp(end_date, is_end_date=True)
-    
-    all_deals = []
-    after = None
-    
     url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals/search"
     
-    # [OK] CORRECT FILTER: Use Stage IDs
-    filter_groups = [{
-        "filters": [
-            {
-                "propertyName": "dealstage",
-                "operator": "IN",
-                "values": customer_stage_ids
-            },
-            {
-                "propertyName": "closedate",
-                "operator": "GTE",
-                "value": start_timestamp
-            },
-            {
-                "propertyName": "closedate",
-                "operator": "LTE", 
-                "value": end_timestamp
-            }
-        ]
-    }]
-    
     deal_properties = [
-        "dealname",
-        "dealstage",
-        "amount",
-        "hubspot_owner_id",
-        "closedate",
-        "createdate",
-        "course",
-        "program",
-        "product",
-        "service",
-        "offering",
-        "course_name",
-        "program_name",
-        "partial_amount",
-        "hs_v2_date_entered_2107527928",  # Online pipeline stage timestamp
-        "hs_v2_date_entered_2171957962",  # Offline pipeline stage timestamp
-        "hs_v2_date_entered_contractsent", # Hot
-        "hs_v2_date_entered_presentationscheduled", # Warm
-        "hs_v2_date_entered_decisionmakerboughtin", # Cold
-        "hs_analytics_source"
+        "dealname", "dealstage", "amount", "hubspot_owner_id", "closedate", "createdate",
+        "course", "program", "product", "service", "offering", "course_name", "program_name",
+        "partial_amount", "hs_v2_date_entered_2107527928", "hs_v2_date_entered_2171957962",
+        "hs_v2_date_entered_contractsent", "hs_v2_date_entered_presentationscheduled",
+        "hs_v2_date_entered_decisionmakerboughtin", "hs_analytics_source"
     ]
     
-    try:
+    all_deals = []
+    
+    date_chunks = []
+    curr_start = start_date
+    while curr_start <= end_date:
+        curr_end = min(curr_start + timedelta(days=35), end_date)
+        date_chunks.append((curr_start, curr_end))
+        curr_start = curr_end + timedelta(days=1)
+        
+    def fetch_deal_chunk(chunk_start, chunk_end):
+        chunk_deals = []
+        start_timestamp = date_to_hubspot_timestamp(chunk_start, is_end_date=False)
+        end_timestamp = date_to_hubspot_timestamp(chunk_end, is_end_date=True)
+        
+        filter_groups = [{
+            "filters": [
+                {"propertyName": "dealstage", "operator": "IN", "values": customer_stage_ids},
+                {"propertyName": "closedate", "operator": "GTE", "value": start_timestamp},
+                {"propertyName": "closedate", "operator": "LTE", "value": end_timestamp}
+            ]
+        }]
+        
+        after = None
         while True:
             body = {
                 "filterGroups": filter_groups,
@@ -2197,38 +2167,71 @@ def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
                 "limit": 100,
                 "sorts": [{"propertyName": "closedate", "direction": "DESCENDING"}]
             }
+            if after: body["after"] = after
             
-            if after:
-                body["after"] = after
-            
-            response = requests.post(url, headers=headers, json=body, timeout=30)
-            
-            if response.status_code == 429:
-                time.sleep(10)
-                continue
-            
-            response.raise_for_status()
-            data = response.json()
-            
-            batch_deals = data.get("results", [])
-            
-            if batch_deals:
-                all_deals.extend(batch_deals)
-                paging_info = data.get("paging", {})
-                after = paging_info.get("next", {}).get("after")
+            try:
+                response = requests.post(url, headers=headers, json=body, timeout=30)
+                if response.status_code == 429:
+                    time.sleep(3)
+                    continue
+                if response.status_code == 400: break
+                response.raise_for_status()
+                data = response.json()
                 
-                if not after:
-                    break
-                
-                time.sleep(0.1)
-            else:
+                batch = data.get("results", [])
+                if batch:
+                    chunk_deals.extend(batch)
+                    after = data.get("paging", {}).get("next", {}).get("after")
+                    if not after: break
+                else: break
+            except Exception:
                 break
-        
+        return chunk_deals
+
+    try:
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_chunk = {executor.submit(fetch_deal_chunk, start, end): (start, end) for start, end in date_chunks}
+            for future in as_completed(future_to_chunk):
+                all_deals.extend(future.result())
+
+        if all_deals:
+            try:
+                assoc_url = f"{HUBSPOT_API_BASE}/crm/v3/associations/deals/contacts/batch/read"
+                deal_contact_map = {}
+                deal_ids = [str(d.get("id")) for d in all_deals if d.get("id")]
+                
+                def fetch_associations(batch_ids):
+                    assoc_body = {"inputs": [{"id": did} for did in batch_ids]}
+                    assoc_resp = requests.post(assoc_url, headers=headers, json=assoc_body, timeout=30)
+                    if assoc_resp.status_code in [200, 207]:
+                        return assoc_resp.json().get("results", [])
+                    return []
+
+                batches = [deal_ids[i:i+100] for i in range(0, len(deal_ids), 100)]
+                
+                with ThreadPoolExecutor(max_workers=5) as assoc_exec:
+                    for result_batch in assoc_exec.map(fetch_associations, batches):
+                        for result in result_batch:
+                            from_id = str(result.get("from", {}).get("id"))
+                            to_items = result.get("to", [])
+                            if to_items:
+                                contact_id = str(to_items[0].get("id"))
+                                if from_id not in deal_contact_map:
+                                    deal_contact_map[from_id] = []
+                                deal_contact_map[from_id].append({"id": contact_id})
+                
+                for deal in all_deals:
+                    deal_id = str(deal.get("id"))
+                    if deal_id in deal_contact_map:
+                        if "associations" not in deal: deal["associations"] = {}
+                        if "contacts" not in deal["associations"]: deal["associations"]["contacts"] = {"results": []}
+                        for c in deal_contact_map[deal_id]:
+                            deal["associations"]["contacts"]["results"].append({"id": c["id"]})
+                            
+            except Exception as e:
+                pass
+                
         return all_deals, len(all_deals)
-        
-    except requests.exceptions.RequestException as e:
-        st.error(f" Error fetching deals: {e}")
-        return [], 0
     except Exception as e:
         st.error(f" Unexpected error fetching deals: {e}")
         return [], 0
@@ -2289,112 +2292,81 @@ def get_hubspot_iso_timestamp(date_obj, is_end_date=False):
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_team_performance_deals(api_key, start_date, end_date, stage_ids_map):
     """
-    Fetch deals using 3 SEPARATE queries for Hot, Warm, Cold to avoid OR-logic issues.
-    Merges results by Deal ID.
+    Fetch deals using 3 SEPARATE queries for Hot, Warm, Cold in parallel chunks.
     """
-    if not stage_ids_map:
-        st.warning("Debug: stage_ids_map is empty")
-        return [], 0
+    if not stage_ids_map: return [], 0
         
-    st.write(f"Debug: stage_ids_map: {stage_ids_map}")
-    st.write(f"Debug: Fetching separate cohorts for {start_date} to {end_date}")
-
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
-    # [OK] CRITICAL: Use ISO/UTC strings for Search API
-    start_utc = get_hubspot_iso_timestamp(start_date, is_end_date=False)
-    end_utc = get_hubspot_iso_timestamp(end_date, is_end_date=True)
-    
-    all_deals_map = {}
     url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals/search"
+    all_deals_map = {}
     
-    # Properties to fetch
     properties = [
         "dealname", "dealstage", "amount", "hubspot_owner_id", "closedate", "createdate",
         "course", "program", "program_name", "course_name"
     ]
-    # Add all date entered props
     for stage_name, stage_id in stage_ids_map.items():
-        # [FIX] Use v2 property for correct historical data
         properties.append(f"hs_v2_date_entered_{stage_id}")
+
+    date_chunks = []
+    curr_start = start_date
+    while curr_start <= end_date:
+        curr_end = min(curr_start + timedelta(days=35), end_date)
+        date_chunks.append((curr_start, curr_end))
+        curr_start = curr_end + timedelta(days=1)
         
-    # Helper to run a single query
-    def fetch_cohort(filter_group, cohort_name):
+    def fetch_cohort(prop, operator1, val1, operator2, val2):
         cohort_deals = []
         try:
             after = None
             while True:
                 body = {
-                    "filterGroups": [filter_group],
+                    "filterGroups": [{
+                        "filters": [
+                            {"propertyName": prop, "operator": operator1, "value": val1},
+                            {"propertyName": prop, "operator": operator2, "value": val2}
+                        ]
+                    }],
                     "properties": properties,
                     "limit": 100
                 }
-                if after:
-                    body['after'] = after
-                    
+                if after: body['after'] = after
                 response = requests.post(url, headers=headers, json=body, timeout=30)
                 if response.status_code == 429:
                     time.sleep(2)
                     continue
+                if response.status_code == 400: break
                 response.raise_for_status()
                 data = response.json()
-                results = data.get('results', [])
-                cohort_deals.extend(results)
+                cohort_deals.extend(data.get('results', []))
                 
-                paging = data.get('paging', {})
-                after = paging.get('next', {}).get('after')
-                if not after:
-                    break
+                after = data.get('paging', {}).get('next', {}).get('after')
+                if not after: break
             return cohort_deals
         except Exception as e:
-            st.warning(f"Warning: Failed to fetch {cohort_name} deals: {e}")
             return []
 
-    # 1. Fetch HOT
-    if 'Hot' in stage_ids_map:
-        hot_id = stage_ids_map['Hot']
-        f_group = {
-            "filters": [
-                {"propertyName": f"hs_v2_date_entered_{hot_id}", "operator": "GTE", "value": start_utc},
-                {"propertyName": f"hs_v2_date_entered_{hot_id}", "operator": "LTE", "value": end_utc}
-            ]
-        }
-        hot_deals = fetch_cohort(f_group, "Hot")
-        for d in hot_deals:
-            all_deals_map[d['id']] = d
+    def fetch_all_cohorts_for_chunk(chunk_start, chunk_end):
+        start_utc = get_hubspot_iso_timestamp(chunk_start, is_end_date=False)
+        end_utc = get_hubspot_iso_timestamp(chunk_end, is_end_date=True)
+        results = []
+        if 'Hot' in stage_ids_map:
+            results.extend(fetch_cohort(f"hs_v2_date_entered_{stage_ids_map['Hot']}", "GTE", start_utc, "LTE", end_utc))
+        if 'Warm' in stage_ids_map:
+            results.extend(fetch_cohort(f"hs_v2_date_entered_{stage_ids_map['Warm']}", "GTE", start_utc, "LTE", end_utc))
+        if 'Cold' in stage_ids_map:
+            results.extend(fetch_cohort(f"hs_v2_date_entered_{stage_ids_map['Cold']}", "GTE", start_utc, "LTE", end_utc))
+        return results
 
-    # 2. Fetch WARM
-    if 'Warm' in stage_ids_map:
-        warm_id = stage_ids_map['Warm']
-        f_group = {
-            "filters": [
-                {"propertyName": f"hs_v2_date_entered_{warm_id}", "operator": "GTE", "value": start_utc},
-                {"propertyName": f"hs_v2_date_entered_{warm_id}", "operator": "LTE", "value": end_utc}
-            ]
-        }
-        warm_deals = fetch_cohort(f_group, "Warm")
-        for d in warm_deals:
-            all_deals_map[d['id']] = d
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        for chunk_results in executor.map(lambda c: fetch_all_cohorts_for_chunk(c[0], c[1]), date_chunks):
+            for d in chunk_results:
+                all_deals_map[d['id']] = d
 
-    # 3. Fetch COLD
-    if 'Cold' in stage_ids_map:
-        cold_id = stage_ids_map['Cold']
-        f_group = {
-            "filters": [
-                {"propertyName": f"hs_v2_date_entered_{cold_id}", "operator": "GTE", "value": start_utc},
-                {"propertyName": f"hs_v2_date_entered_{cold_id}", "operator": "LTE", "value": end_utc}
-            ]
-        }
-        cold_deals = fetch_cohort(f_group, "Cold")
-        for d in cold_deals:
-            all_deals_map[d['id']] = d
-
-    # Combine
     unique_deals = list(all_deals_map.values())
-    st.write(f"Debug: Total unique team performance deals: {len(unique_deals)}")
     return unique_deals, len(unique_deals)
 
 @st.cache_data(show_spinner=False)
@@ -2538,12 +2510,12 @@ def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stag
             if owners:
                 owner_id = str(owners[0].get("id", ""))
 
-        # [OK] NEW: Extract associated contact ID
-        associated_contact_id = ""
+        # [OK] NEW: Extract ALL associated contact IDs
+        associated_contact_ids = []
         associations = deal.get("associations", {})
         contacts_assoc = associations.get("contacts", {}).get("results", [])
         if contacts_assoc:
-            associated_contact_id = str(contacts_assoc[0].get("id", ""))
+            associated_contact_ids = [str(c.get("id", "")) for c in contacts_assoc]
         
         owner_id = str(owner_id)
         
@@ -2624,7 +2596,7 @@ def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stag
             "Close Date": close_date,
             "Deal Stage ID": deal_stage_id,
             "Deal Stage Label": deal_stage_label,
-            "Associated Contact ID": associated_contact_id, # [OK] NEW: Link to contact
+            "Associated Contact IDs": associated_contact_ids, # [OK] NEW: Link to contact
             "Is Customer": 1,  # [OK] ALL these deals are customers
             "Was_Hot": 1 if date_entered_hot else 0,
             "Was_Warm": 1 if date_entered_warm else 0,
@@ -3523,8 +3495,9 @@ def main():
 
         
         # Date Range
-        st.markdown("##  Date Range Filter")
+        st.markdown("##  Date Range Filters")
         
+        st.markdown("### Lead Created Date Range")
         date_field = st.selectbox(
             "Select date field for LEADS:",
             ["Created Date", "Last Modified Date", "Both"]
@@ -3533,12 +3506,26 @@ def main():
         default_end = datetime.now(IST).date()
         default_start = default_end - timedelta(days=30)
         
-        start_date = st.date_input("Start date", value=default_start)
-        end_date = st.date_input("End date", value=default_end)
+        start_date = st.date_input("Lead Start date", value=default_start)
+        end_date = st.date_input("Lead End date", value=default_end)
         
         if start_date > end_date:
-            st.error("Start date must be before end date!")
+            st.error("Lead Start date must be before end date!")
             return
+            
+        st.markdown("### Deal Close Date Range")
+        use_custom_close_date = st.checkbox("Customize Deal Close Date (for Cohort Analysis)", value=False)
+        
+        if use_custom_close_date:
+            deal_start_date = st.date_input("Deal Start date", value=default_start)
+            deal_end_date = st.date_input("Deal End date", value=default_end)
+            
+            if deal_start_date > deal_end_date:
+                st.error("Deal Start date must be before end date!")
+                return
+        else:
+            deal_start_date = start_date
+            deal_end_date = end_date
         
         st.divider()
         
@@ -3571,6 +3558,7 @@ def main():
                         # Store date filter info
                         st.session_state.date_filter = date_field
                         st.session_state.date_range = (start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+                        st.session_state.deal_date_range = (deal_start_date.strftime("%Y-%m-%d"), deal_end_date.strftime("%Y-%m-%d"))
                         
                         # Fetch owners
                         owner_mapping = fetch_owner_mapping(api_key)
@@ -3583,13 +3571,13 @@ def main():
                         
                         # [OK] Fetch DEALS using Stage IDs
                         deals, total_deals = fetch_hubspot_deals(
-                            api_key, start_date, end_date, CUSTOMER_DEAL_STAGES
+                            api_key, deal_start_date, deal_end_date, CUSTOMER_DEAL_STAGES
                         )
                         
                         # [OK] NEW: Fetch Team Performance Deals (Date Entered Logic)
                         stage_ids_map = detect_key_stages(st.session_state.deal_stages)
                         team_perf_deals, count_tp = fetch_team_performance_deals(
-                            api_key, start_date, end_date, stage_ids_map
+                            api_key, deal_start_date, deal_end_date, stage_ids_map
                         )
                         
                         if contacts:
@@ -3598,7 +3586,7 @@ def main():
                             st.session_state.contacts_df = df_contacts
                             
                             # Process deals (customers)
-                            df_customers = process_deals_as_customers(deals, owner_mapping, api_key, st.session_state.deal_stages, start_date=start_date)
+                            df_customers = process_deals_as_customers(deals, owner_mapping, api_key, st.session_state.deal_stages, start_date=deal_start_date)
                             
                             # [OK] FILTER OUT EXCLUDED OWNERS
                             if df_contacts is not None and not df_contacts.empty:
@@ -3615,7 +3603,7 @@ def main():
                             
                             # [OK] NEW: Process Team Performance Metrics
                             stage_ids_map = detect_key_stages(st.session_state.deal_stages)
-                            df_team_perf = process_team_performance_metrics(team_perf_deals, start_date, end_date, stage_ids_map, owner_mapping)
+                            df_team_perf = process_team_performance_metrics(team_perf_deals, deal_start_date, deal_end_date, stage_ids_map, owner_mapping)
                             
                             # [OK] NEW: Merge Customer Count/Revenue from metric_4 (Sales Performance)
                             if not metric_4_data.empty:
@@ -4017,7 +4005,7 @@ def main():
         st.divider()
         
         # [OK] ENHANCED: Create tabs with NEW METRIC 6 & 7 tab
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15 = st.tabs([
             " Lead Analysis", 
             " Customer Analysis", 
             " Owner KPI Dashboard",
@@ -4031,7 +4019,8 @@ def main():
             " Month Comparison", # [OK] NEW TAB FOR MONTH COMPARISON
             " Team Performance 2",
             " This month lead performance",
-            " Qualified Lead Drill-down"
+            " Qualified Lead Drill-down",
+            "📅 Cohort Analysis"
         ])
         
         # SECTION 1: Lead Analysis
@@ -5207,7 +5196,67 @@ def main():
                     )
                 else:
                     st.info("Insufficient data for Owner Comparison")
+                    
+        # SECTION 15: Cohort Analysis
+        with tab15:
+            st.markdown('<div class="section-header"><h3> 📅 Cohort Analysis (Lead to Customer)</h3></div>', unsafe_allow_html=True)
+            if st.session_state.date_range and getattr(st.session_state, 'deal_date_range', None):
+                st.markdown(f"**Analyzing Leads Created:** {st.session_state.date_range[0]} to {st.session_state.date_range[1]}")
+                st.markdown(f"**For Deals Closed:** {st.session_state.deal_date_range[0]} to {st.session_state.deal_date_range[1]}")
+            
+            if st.session_state.contacts_df is not None and st.session_state.customers_df is not None:
+                # Check if ANY of the deal's associated contacts were created in the lead date range
+                valid_contact_ids = set(st.session_state.contacts_df['ID'].astype(str))
+                
+                def has_valid_contact(ids):
+                    if isinstance(ids, list):
+                        return any(str(c_id) in valid_contact_ids for c_id in ids)
+                    return False
+                
+                mask = st.session_state.customers_df['Associated Contact IDs'].apply(has_valid_contact)
+                cohort_customers = st.session_state.customers_df[mask].copy()
+                
+                if not cohort_customers.empty:
+                    # Convert to datetime and properly extract month
+                    cohort_customers['Close Date DT'] = pd.to_datetime(cohort_customers['Close Date'], format='mixed', utc=True)
+                    # Filter out NaT
+                    valid_dates = cohort_customers.dropna(subset=['Close Date DT']).copy()
+                    
+                    if not valid_dates.empty:
+                        valid_dates['Close Month'] = valid_dates['Close Date DT'].dt.to_period('M').astype(str)
+                        
+                        # Group by Close Month
+                        cohort_summary = valid_dates.groupby('Close Month').size().reset_index(name='Customers')
+                        cohort_summary = cohort_summary.sort_values('Close Month')
+                        
+                        total_cohort_leads = len(st.session_state.contacts_df)
+                        total_cohort_customers = len(valid_dates)
+                        conversion_rate = (total_cohort_customers / total_cohort_leads * 100) if total_cohort_leads > 0 else 0
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.markdown(render_kpi("Cohort Leads", f"{total_cohort_leads:,}", "Created in Lead Date Range", "kpi-box-blue"), unsafe_allow_html=True)
+                        with col2:
+                            st.markdown(render_kpi("Cohort Customers", f"{total_cohort_customers:,}", "Closed in Deal Date Range", "kpi-box-green"), unsafe_allow_html=True)
+                        with col3:
+                            st.markdown(render_kpi("Cohort Conversion", f"{conversion_rate:.1f}%", "Lead to Customer", "kpi-box-purple"), unsafe_allow_html=True)
+                            
+                        st.markdown("### Customers by Close Month")
+                        fig = px.bar(
+                            cohort_summary, x='Close Month', y='Customers',
+                            text='Customers', labels={'Close Month': 'Month Customer Closed', 'Customers': 'Number of Customers'},
+                            color_discrete_sequence=['#2ca02c']
+                        )
+                        fig.update_traces(textposition='outside')
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        st.dataframe(cohort_summary, use_container_width=True)
+                    else:
+                        st.info("No valid close dates found for cohort customers.")
+                else:
+                    st.info("No customers found that were created in the Lead Date Range and closed in the Deal Date Range.")
     
+
     else:
         # Welcome screen
         st.markdown(
