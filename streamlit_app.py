@@ -35,7 +35,12 @@ EXCLUDED_OWNERS = [
     "arya.krishnan",
     "Devi Krishna",
     "Aneesha S",
-    "Sonia William"
+    "Sonia William",
+    "recruitment",
+    "Rekha Raveendran",
+    "Aswathy Krishnan",
+    "Chandana Sekhar",
+    "nandhana.sivakumar"
 ]
 
 # Will be populated dynamically
