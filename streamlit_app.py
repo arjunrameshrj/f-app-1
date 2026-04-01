@@ -46,6 +46,11 @@ EXCLUDED_OWNERS = [
 # Will be populated dynamically
 CUSTOMER_DEAL_STAGES = []  # Will contain stage IDs, not labels
 
+# [OK] NEW: Partial Payment Stage IDs
+PARTIAL_ONLINE_STAGE_ID = "2107527928"    # Online partial payment stage
+PARTIAL_OFFLINE_STAGE_ID = "2171957962"   # Offline partial payment stage
+PARTIAL_STAGE_IDS = [PARTIAL_ONLINE_STAGE_ID, PARTIAL_OFFLINE_STAGE_ID]
+
 # Custom CSS for better styling
 st.markdown("""
 <style>
@@ -2244,6 +2249,133 @@ def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
         st.error(f" Unexpected error fetching deals: {e}")
         return [], 0
 
+# [OK] NEW: Fetch partial payment deals that entered partial stage in current month
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_partial_payment_deals(api_key, start_date, end_date):
+    """Fetch deals that ENTERED partial payment stage during the reporting period."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals/search"
+    
+    ist = pytz.timezone('Asia/Kolkata')
+    start_utc = datetime.combine(start_date, datetime.min.time())
+    start_utc = ist.localize(start_utc).astimezone(pytz.UTC).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+    end_utc = datetime.combine(end_date, datetime.max.time())
+    end_utc = ist.localize(end_utc).astimezone(pytz.UTC).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+    
+    properties = [
+        "dealname", "dealstage", "amount", "partial_amount",
+        "hubspot_owner_id", "closedate", "createdate",
+        "course", "program", "course_name", "program_name",
+        "hs_v2_date_entered_2107527928", "hs_v2_date_entered_2171957962",
+    ]
+    
+    all_deals = []
+    
+    for stage_id in PARTIAL_STAGE_IDS:
+        prop_name = f"hs_v2_date_entered_{stage_id}"
+        after = None
+        while True:
+            body = {
+                "filterGroups": [{
+                    "filters": [
+                        {"propertyName": prop_name, "operator": "GTE", "value": start_utc},
+                        {"propertyName": prop_name, "operator": "LTE", "value": end_utc}
+                    ]
+                }],
+                "properties": properties,
+                "limit": 100,
+            }
+            if after:
+                body["after"] = after
+            try:
+                response = requests.post(url, headers=headers, json=body, timeout=30)
+                if response.status_code == 429:
+                    time.sleep(3)
+                    continue
+                if response.status_code == 400:
+                    break
+                response.raise_for_status()
+                data = response.json()
+                batch = data.get("results", [])
+                all_deals.extend(batch)
+                after = data.get("paging", {}).get("next", {}).get("after")
+                if not after:
+                    break
+            except Exception:
+                break
+    
+    return all_deals
+
+def calculate_partial_revenue(partial_deals, admission_deal_ids, owner_mapping, start_date, end_date):
+    """Calculate revenue from partial payment deals that are NOT yet admission confirmed.
+    Only counts partial_amount (not full amount) and does NOT add to customer count."""
+    
+    seen_ids = set()
+    partial_online_total = 0
+    partial_offline_total = 0
+    partial_online_count = 0
+    partial_offline_count = 0
+    
+    for deal in partial_deals:
+        deal_id = str(deal.get("id"))
+        
+        # Skip if already counted in Admission Confirmed
+        if deal_id in admission_deal_ids:
+            continue
+        # Skip duplicates
+        if deal_id in seen_ids:
+            continue
+        seen_ids.add(deal_id)
+        
+        props = deal.get("properties", {})
+        owner_id = str(props.get("hubspot_owner_id", ""))
+        owner_name = owner_mapping.get(owner_id, f"Unknown ({owner_id})")
+        if owner_name in EXCLUDED_OWNERS:
+            continue
+        
+        partial_amount_str = props.get("partial_amount", "0")
+        partial_amount = 0
+        if partial_amount_str:
+            try:
+                partial_amount = float(str(partial_amount_str).replace(",", ""))
+            except:
+                partial_amount = 0
+        
+        if partial_amount <= 0:
+            continue
+        
+        # Determine which pipeline
+        partial_ts_online = props.get("hs_v2_date_entered_2107527928", "")
+        partial_ts_offline = props.get("hs_v2_date_entered_2171957962", "")
+        
+        partial_ts = partial_ts_online or partial_ts_offline
+        if not partial_ts:
+            continue
+        
+        try:
+            partial_dt = datetime.fromisoformat(partial_ts.replace('Z', '+00:00'))
+            if start_date.month <= partial_dt.month and partial_dt.year == start_date.year:
+                if partial_ts_online:
+                    partial_online_total += partial_amount
+                    partial_online_count += 1
+                else:
+                    partial_offline_total += partial_amount
+                    partial_offline_count += 1
+        except:
+            pass
+    
+    return {
+        'online_total': partial_online_total,
+        'offline_total': partial_offline_total,
+        'online_count': partial_online_count,
+        'offline_count': partial_offline_count,
+        'total': partial_online_total + partial_offline_total,
+        'count': partial_online_count + partial_offline_count
+    }
+
 def detect_key_stages(all_stages):
     """
     Dynamically identify Stage IDs for Hot, Warm, Cold.
@@ -3282,9 +3414,14 @@ def calculate_kpis(df_contacts, df_customers):
     
     # CUSTOMER metrics from DEALS
     if df_customers is not None and not df_customers.empty:
-        customer = len(df_customers)
-        total_revenue = df_customers['Amount'].sum()
-        avg_revenue_per_customer = round((total_revenue / customer), 0) if customer > 0 else 0
+        customer = len(df_customers)  # Customer count = ONLY Admission Confirmed
+        admission_revenue = df_customers['Amount'].sum()
+        
+        # [OK] NEW: Add partial payment revenue from current month (non-confirmed deals)
+        partial_rev = st.session_state.get('partial_revenue', {}).get('total', 0) if 'partial_revenue' in st.session_state else 0
+        total_revenue = admission_revenue + partial_rev
+        
+        avg_revenue_per_customer = round((admission_revenue / customer), 0) if customer > 0 else 0
     else:
         customer = 0
         total_revenue = 0
@@ -3409,6 +3546,8 @@ def main():
         st.session_state.matrix_data = None
     if 'team_performance_df' not in st.session_state:
         st.session_state.team_performance_df = None
+    if 'partial_revenue' not in st.session_state:
+        st.session_state.partial_revenue = {'total': 0, 'online_total': 0, 'offline_total': 0, 'count': 0}
     
     # [OK] Fetch Deal Pipeline Stages FIRST
     if 'deal_stages' not in st.session_state or st.session_state.deal_stages is None:
@@ -3595,6 +3734,14 @@ def main():
                             
                             # Process deals (customers)
                             df_customers = process_deals_as_customers(deals, owner_mapping, api_key, st.session_state.deal_stages, start_date=deal_start_date)
+                            
+                            # [OK] NEW: Fetch partial payment deals for current month revenue
+                            partial_deals = fetch_partial_payment_deals(api_key, deal_start_date, deal_end_date)
+                            admission_deal_ids = set(str(d.get('id')) for d in deals)
+                            partial_rev = calculate_partial_revenue(
+                                partial_deals, admission_deal_ids, owner_mapping, deal_start_date, deal_end_date
+                            )
+                            st.session_state.partial_revenue = partial_rev
                             
                             # [OK] FILTER OUT EXCLUDED OWNERS
                             if df_contacts is not None and not df_contacts.empty:
@@ -3951,15 +4098,20 @@ def main():
         # Calculate TOTAL KPIs (Unfiltered)
         kpis = calculate_kpis(df_contacts, df_customers)
         
+        # [OK] NEW: Get partial revenue info for display
+        partial_rev_info = st.session_state.get('partial_revenue', {'total': 0, 'count': 0})
+        partial_rev_total = partial_rev_info.get('total', 0)
+        
         # Primary KPI Row
+        revenue_subtitle = f"Admission + Rs.{partial_rev_total:,.0f} partials" if partial_rev_total > 0 else f"From {kpis['customer']:,} customers"
         st.markdown(
             render_kpi_row([
                 render_kpi("Total Leads", f"{kpis['total_leads']:,}", "From Contacts", "kpi-box-blue"),
                 render_kpi("Deal Leads", f"{kpis['deal_leads']:,}", f"{kpis['lead_to_deal_pct']}% conversion", "kpi-box-green"),
                 render_kpi("Qualified Leads", f"{kpis['qualified_lead']:,}", "Created & Closed", "kpi-box-orange"),
                 render_kpi("Qualified Lead Value", f"Rs.{kpis['qualified_lead_revenue']:,.0f}", "Revenue Amount", "kpi-box-teal"),
-                render_kpi("Customers", f"{kpis['customer']:,}", "From Deals ONLY", "deal-kpi"),
-                render_kpi("Total Revenue", f"Rs.{kpis['total_revenue']:,.0f}", f"From {kpis['customer']:,} customers", "revenue-kpi"),
+                render_kpi("Customers", f"{kpis['customer']:,}", "Admission Confirmed ONLY", "deal-kpi"),
+                render_kpi("Total Revenue", f"Rs.{kpis['total_revenue']:,.0f}", revenue_subtitle, "revenue-kpi"),
             ]),
             unsafe_allow_html=True
         )
