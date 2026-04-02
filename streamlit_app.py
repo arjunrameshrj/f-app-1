@@ -4205,7 +4205,7 @@ def main():
                     color_discrete_sequence=COLOR_PALETTE
                 )
                 fig.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig, width='stretch')
+                st.plotly_chart(fig, use_container_width=True)
             
             with col2:
                 # Top Courses
@@ -4222,11 +4222,11 @@ def main():
                         color_continuous_scale='Viridis'
                     )
                     fig.update_layout(xaxis_tickangle=-45, height=400)
-                    st.plotly_chart(fig, width='stretch')
+                    st.plotly_chart(fig, use_container_width=True)
             
             # Lead Data Table
             st.markdown("#### Lead Data")
-            st.dataframe(filtered_df, width='stretch', height=300)
+            st.dataframe(filtered_df, use_container_width=True, height=300)
         
         # SECTION 2: Customer Analysis
         with tab2:
@@ -4269,14 +4269,14 @@ def main():
                         textposition='outside'
                     )
                     fig.update_layout(xaxis_tickangle=-45, height=400)
-                    st.plotly_chart(fig, width='stretch')
+                    st.plotly_chart(fig, use_container_width=True)
                 
                 # Customer Data Table
                 st.markdown("#### Customer Deal Data")
                 display_df = filtered_customers.copy()
                 if 'Amount' in display_df.columns:
                     display_df['Amount'] = display_df['Amount'].apply(lambda x: f"Rs.{x:,.0f}")
-                st.dataframe(display_df, width='stretch', height=300)
+                st.dataframe(display_df, use_container_width=True, height=300)
             else:
                 st.info("No customer data available")
         
@@ -4480,7 +4480,7 @@ def main():
                             labels=dict(color="Performance Score")
                         )
                         fig.update_layout(height=400)
-                        st.plotly_chart(fig, width='stretch')
+                        st.plotly_chart(fig, use_container_width=True)
                         
                         st.markdown("""
                         <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
@@ -4659,7 +4659,7 @@ def main():
                             color_discrete_sequence=px.colors.qualitative.Set3
                         )
                         fig.update_layout(xaxis_tickangle=-45, height=400)
-                        st.plotly_chart(fig, width='stretch')
+                        st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("No lead status data available")
         
@@ -4957,7 +4957,7 @@ def main():
                                 yaxis_title="Percentage (%)",
                                 height=400
                             )
-                            st.plotly_chart(fig, width='stretch')
+                            st.plotly_chart(fig, use_container_width=True)
                     
                     elif comparison_results['type'] == 'owner_vs_owner':
                         # ONE VISUAL: Funnel bar chart
@@ -4997,7 +4997,7 @@ def main():
                                     height=400
                                 )
                                 fig.update_traces(texttemplate='%{text}', textposition='outside')
-                                st.plotly_chart(fig, width='stretch')
+                                st.plotly_chart(fig, use_container_width=True)
                     
                     elif comparison_results['type'] == 'course_vs_owner':
                         # ONE VISUAL: Heatmap
@@ -5013,7 +5013,7 @@ def main():
                                 color_continuous_scale='RdYlGn'
                             )
                             fig.update_layout(height=400)
-                            st.plotly_chart(fig, width='stretch')
+                            st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("Select two items to compare")
         
