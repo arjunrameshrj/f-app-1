@@ -4335,7 +4335,7 @@ def main():
                     return ['background-color: #d4edda; font-weight: bold' if is_total else '' for _ in s]
                 
                 # Apply styling to the filtered dataframe
-                styled_df = display_df.style.apply(highlight_total_row, axis=1).applymap(highlight_lead_to_customer, subset=['Lead->Customer %'])
+                styled_df = display_df.style.apply(highlight_total_row, axis=1).map(highlight_lead_to_customer, subset=['Lead->Customer %'])
                 
                 st.dataframe(styled_df, use_container_width=True, height=400)
         
@@ -4360,10 +4360,10 @@ def main():
                     return ''
                 
                 # Apply conditional formatting
-                styled_df = metric_5.style.applymap(
+                styled_df = metric_5.style.map(
                     highlight_course_performance, 
                     subset=['Lead->Customer %']
-                ).applymap(
+                ).map(
                     highlight_course_performance, 
                     subset=['Customer %']
                 )
@@ -4724,7 +4724,7 @@ def main():
                     return ''
                 
                 # Display with styling
-                styled_matrix = filtered_matrix_data.style.applymap(color_matrix, subset=['Segment'])
+                styled_matrix = filtered_matrix_data.style.map(color_matrix, subset=['Segment'])
                 
                 col_mat1, col_mat2 = st.columns([3, 1])
                 with col_mat1:
@@ -5301,7 +5301,7 @@ def main():
                         return f'color: {color}; font-weight: bold'
                     
                     st.dataframe(
-                        comp_df.style.applymap(highlight_change, subset=['Lead Change', 'Deal % Change']),
+                        comp_df.style.map(highlight_change, subset=['Lead Change', 'Deal % Change']),
                         use_container_width=True
                     )
                 else:
@@ -5351,7 +5351,7 @@ def main():
                         return f'color: {color}; font-weight: bold'
                         
                     st.dataframe(
-                        owner_comp_df.style.applymap(highlight_change, subset=['Lead Change', 'Conv % Change']),
+                        owner_comp_df.style.map(highlight_change, subset=['Lead Change', 'Conv % Change']),
                         use_container_width=True
                     )
                 else:
