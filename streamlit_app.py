@@ -43,6 +43,12 @@ EXCLUDED_OWNERS = [
     "nandhana.sivakumar"
 ]
 
+# Excluded Deal Name Keywords - deals containing these terms are FULLY excluded from ALL counts and revenue
+EXCLUDED_DEAL_KEYWORDS = [
+    "vacation batch",
+    "vacation_batch",
+]
+
 # Will be populated dynamically
 CUSTOMER_DEAL_STAGES = []  # Will contain stage IDs, not labels
 
@@ -2331,6 +2337,12 @@ def calculate_partial_revenue(partial_deals, admission_deal_ids, owner_mapping, 
         seen_ids.add(deal_id)
         
         props = deal.get("properties", {})
+
+        # [EXCLUDED] Skip Vacation Batch partial payment deals
+        deal_name_raw = str(props.get("dealname", "") or "").lower().strip()
+        if any(kw in deal_name_raw for kw in EXCLUDED_DEAL_KEYWORDS):
+            continue
+
         owner_id = str(props.get("hubspot_owner_id", ""))
         owner_name = owner_mapping.get(owner_id, f"Unknown ({owner_id})")
         if owner_name in EXCLUDED_OWNERS:
@@ -2519,7 +2531,7 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None, start_date
     
     for contact in contacts:
         properties = contact.get("properties", {})
-        
+
         # Extract course information
         course_info = ""
         course_fields = [
@@ -2528,11 +2540,23 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None, start_date
             "enquired_course", "interested_course", "course_interested",
             "program_of_interest", "course_of_interest", "product_of_interest"
         ]
-        
+
         for field in course_fields:
             if field in properties and properties[field] and str(properties[field]).strip():
                 course_info = properties[field]
                 break
+
+        # [EXCLUDED] Skip ALL Vacation Batch contacts — no leads, no qualified leads, nothing
+        if any(kw in str(course_info).lower().strip() for kw in EXCLUDED_DEAL_KEYWORDS):
+            continue
+
+        # [EXCLUDED] Also check raw property values directly in case course_info missed it
+        _all_course_vals = " ".join(
+            str(properties.get(f, "")).lower()
+            for f in course_fields
+        )
+        if any(kw in _all_course_vals for kw in EXCLUDED_DEAL_KEYWORDS):
+            continue
         
         # Owner ID extraction
         owner_id = (
@@ -2628,6 +2652,11 @@ def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stag
     
     for deal in deals:
         properties = deal.get("properties", {})
+
+        # [EXCLUDED] Skip Vacation Batch deals - must not appear anywhere in counts or revenue
+        deal_name_raw = str(properties.get("dealname", "") or "").lower().strip()
+        if any(kw in deal_name_raw for kw in EXCLUDED_DEAL_KEYWORDS):
+            continue
         
         # Extract course information from deal
         course_info = ""
@@ -2640,6 +2669,10 @@ def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stag
             if field in properties and properties[field] and str(properties[field]).strip():
                 course_info = properties[field]
                 break
+
+        # [EXCLUDED] Also skip if course_info itself is a vacation batch keyword
+        if any(kw in str(course_info).lower().strip() for kw in EXCLUDED_DEAL_KEYWORDS):
+            continue
         
         # Owner ID extraction from deal
         owner_id = properties.get("hubspot_owner_id", "")
@@ -2773,6 +2806,12 @@ def process_team_performance_metrics(deals, start_date, end_date, stage_ids_map,
     
     for deal in deals:
         props = deal.get('properties', {})
+
+        # [EXCLUDED] Skip Vacation Batch deals from team performance metrics
+        deal_name_raw = str(props.get("dealname", "") or "").lower().strip()
+        if any(kw in deal_name_raw for kw in EXCLUDED_DEAL_KEYWORDS):
+            continue
+
         owner_id = props.get('hubspot_owner_id')
         owner_name = owner_mapping.get(owner_id, "Unknown Owner") if owner_mapping else str(owner_id)
         current_stage = props.get('dealstage')
@@ -4205,7 +4244,7 @@ def main():
                     color_discrete_sequence=COLOR_PALETTE
                 )
                 fig.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
             
             with col2:
                 # Top Courses
@@ -4222,11 +4261,11 @@ def main():
                         color_continuous_scale='Viridis'
                     )
                     fig.update_layout(xaxis_tickangle=-45, height=400)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
             
             # Lead Data Table
             st.markdown("#### Lead Data")
-            st.dataframe(filtered_df, use_container_width=True, height=300)
+            st.dataframe(filtered_df, width='stretch', height=300)
         
         # SECTION 2: Customer Analysis
         with tab2:
@@ -4269,14 +4308,14 @@ def main():
                         textposition='outside'
                     )
                     fig.update_layout(xaxis_tickangle=-45, height=400)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                 
                 # Customer Data Table
                 st.markdown("#### Customer Deal Data")
                 display_df = filtered_customers.copy()
                 if 'Amount' in display_df.columns:
                     display_df['Amount'] = display_df['Amount'].apply(lambda x: f"Rs.{x:,.0f}")
-                st.dataframe(display_df, use_container_width=True, height=300)
+                st.dataframe(display_df, width='stretch', height=300)
             else:
                 st.info("No customer data available")
         
@@ -4335,7 +4374,7 @@ def main():
                     return ['background-color: #d4edda; font-weight: bold' if is_total else '' for _ in s]
                 
                 # Apply styling to the filtered dataframe
-                styled_df = display_df.style.apply(highlight_total_row, axis=1).map(highlight_lead_to_customer, subset=['Lead->Customer %'])
+                styled_df = display_df.style.apply(highlight_total_row, axis=1).applymap(highlight_lead_to_customer, subset=['Lead->Customer %'])
                 
                 st.dataframe(styled_df, use_container_width=True, height=400)
         
@@ -4360,10 +4399,10 @@ def main():
                     return ''
                 
                 # Apply conditional formatting
-                styled_df = metric_5.style.map(
+                styled_df = metric_5.style.applymap(
                     highlight_course_performance, 
                     subset=['Lead->Customer %']
-                ).map(
+                ).applymap(
                     highlight_course_performance, 
                     subset=['Customer %']
                 )
@@ -4480,7 +4519,7 @@ def main():
                             labels=dict(color="Performance Score")
                         )
                         fig.update_layout(height=400)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
                         
                         st.markdown("""
                         <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 10px 0;">
@@ -4659,7 +4698,7 @@ def main():
                             color_discrete_sequence=px.colors.qualitative.Set3
                         )
                         fig.update_layout(xaxis_tickangle=-45, height=400)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
             else:
                 st.info("No lead status data available")
         
@@ -4724,7 +4763,7 @@ def main():
                     return ''
                 
                 # Display with styling
-                styled_matrix = filtered_matrix_data.style.map(color_matrix, subset=['Segment'])
+                styled_matrix = filtered_matrix_data.style.applymap(color_matrix, subset=['Segment'])
                 
                 col_mat1, col_mat2 = st.columns([3, 1])
                 with col_mat1:
@@ -4957,7 +4996,7 @@ def main():
                                 yaxis_title="Percentage (%)",
                                 height=400
                             )
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
                     
                     elif comparison_results['type'] == 'owner_vs_owner':
                         # ONE VISUAL: Funnel bar chart
@@ -4997,7 +5036,7 @@ def main():
                                     height=400
                                 )
                                 fig.update_traces(texttemplate='%{text}', textposition='outside')
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig, width='stretch')
                     
                     elif comparison_results['type'] == 'course_vs_owner':
                         # ONE VISUAL: Heatmap
@@ -5013,7 +5052,7 @@ def main():
                                 color_continuous_scale='RdYlGn'
                             )
                             fig.update_layout(height=400)
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
             else:
                 st.info("Select two items to compare")
         
@@ -5301,7 +5340,7 @@ def main():
                         return f'color: {color}; font-weight: bold'
                     
                     st.dataframe(
-                        comp_df.style.map(highlight_change, subset=['Lead Change', 'Deal % Change']),
+                        comp_df.style.applymap(highlight_change, subset=['Lead Change', 'Deal % Change']),
                         use_container_width=True
                     )
                 else:
@@ -5351,7 +5390,7 @@ def main():
                         return f'color: {color}; font-weight: bold'
                         
                     st.dataframe(
-                        owner_comp_df.style.map(highlight_change, subset=['Lead Change', 'Conv % Change']),
+                        owner_comp_df.style.applymap(highlight_change, subset=['Lead Change', 'Conv % Change']),
                         use_container_width=True
                     )
                 else:
