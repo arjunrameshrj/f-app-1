@@ -2546,7 +2546,7 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None, start_date
                 course_info = properties[field]
                 break
 
-        # [EXCLUDED] Skip ALL Vacation Batch contacts — no leads, no qualified leads, nothing
+        # [EXCLUDED] Skip ALL Vacation Batch contacts â€” no leads, no qualified leads, nothing
         if any(kw in str(course_info).lower().strip() for kw in EXCLUDED_DEAL_KEYWORDS):
             continue
 
@@ -4219,7 +4219,7 @@ def main():
             " Team Performance 2",
             " This month lead performance",
             " Qualified Lead Drill-down",
-            "📅 Cohort Analysis"
+            "ðŸ“… Cohort Analysis"
         ])
         
         # SECTION 1: Lead Analysis
@@ -4374,7 +4374,7 @@ def main():
                     return ['background-color: #d4edda; font-weight: bold' if is_total else '' for _ in s]
                 
                 # Apply styling to the filtered dataframe
-                styled_df = display_df.style.apply(highlight_total_row, axis=1).applymap(highlight_lead_to_customer, subset=['Lead->Customer %'])
+                styled_df = display_df.style.apply(highlight_total_row, axis=1).map(highlight_lead_to_customer, subset=['Lead->Customer %'])
                 
                 st.dataframe(styled_df, use_container_width=True, height=400)
         
@@ -4399,10 +4399,10 @@ def main():
                     return ''
                 
                 # Apply conditional formatting
-                styled_df = metric_5.style.applymap(
+                styled_df = metric_5.style.map(
                     highlight_course_performance, 
                     subset=['Lead->Customer %']
-                ).applymap(
+                ).map(
                     highlight_course_performance, 
                     subset=['Customer %']
                 )
@@ -4763,7 +4763,7 @@ def main():
                     return ''
                 
                 # Display with styling
-                styled_matrix = filtered_matrix_data.style.applymap(color_matrix, subset=['Segment'])
+                styled_matrix = filtered_matrix_data.style.map(color_matrix, subset=['Segment'])
                 
                 col_mat1, col_mat2 = st.columns([3, 1])
                 with col_mat1:
@@ -5340,7 +5340,7 @@ def main():
                         return f'color: {color}; font-weight: bold'
                     
                     st.dataframe(
-                        comp_df.style.applymap(highlight_change, subset=['Lead Change', 'Deal % Change']),
+                        comp_df.style.map(highlight_change, subset=['Lead Change', 'Deal % Change']),
                         use_container_width=True
                     )
                 else:
@@ -5390,7 +5390,7 @@ def main():
                         return f'color: {color}; font-weight: bold'
                         
                     st.dataframe(
-                        owner_comp_df.style.applymap(highlight_change, subset=['Lead Change', 'Conv % Change']),
+                        owner_comp_df.style.map(highlight_change, subset=['Lead Change', 'Conv % Change']),
                         use_container_width=True
                     )
                 else:
@@ -5398,7 +5398,7 @@ def main():
                     
         # SECTION 15: Cohort Analysis
         with tab15:
-            st.markdown('<div class="section-header"><h3> 📅 Cohort Analysis (Lead to Customer)</h3></div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header"><h3> ðŸ“… Cohort Analysis (Lead to Customer)</h3></div>', unsafe_allow_html=True)
             if st.session_state.date_range and getattr(st.session_state, 'deal_date_range', None):
                 st.markdown(f"**Analyzing Leads Created:** {st.session_state.date_range[0]} to {st.session_state.date_range[1]}")
                 st.markdown(f"**For Deals Closed:** {st.session_state.deal_date_range[0]} to {st.session_state.deal_date_range[1]}")
