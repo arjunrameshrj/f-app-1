@@ -4263,6 +4263,123 @@ def main():
                     fig.update_layout(xaxis_tickangle=-45, height=400)
                     st.plotly_chart(fig, width='stretch')
             
+            # ── Course Owner × Lead Status Table (NC + All) ──────────────────
+            st.markdown("#### 📋 Course Owner wise – NC & All Lead Status Breakdown")
+
+            if 'Course Owner' in filtered_df.columns and 'Lead Status' in filtered_df.columns:
+                # Build pivot: rows = Course Owner, cols = Lead Status
+                owner_status_pivot = (
+                    filtered_df
+                    .groupby(['Course Owner', 'Lead Status'])
+                    .size()
+                    .reset_index(name='Count')
+                )
+
+                owner_pivot_table = owner_status_pivot.pivot_table(
+                    index='Course Owner',
+                    columns='Lead Status',
+                    values='Count',
+                    aggfunc='sum',
+                    fill_value=0
+                ).reset_index()
+
+                # Flatten column names
+                owner_pivot_table.columns.name = None
+
+                # Add Total column
+                status_cols_all = [c for c in owner_pivot_table.columns if c != 'Course Owner']
+                owner_pivot_table['Total'] = owner_pivot_table[status_cols_all].sum(axis=1)
+
+                # ── Detect NC column and add NC% right away (before TOTAL row) ──
+                nc_col = None
+                for possible_nc in ['Not Connected (NC)', 'Not Connected', 'NC']:
+                    if possible_nc in owner_pivot_table.columns:
+                        nc_col = possible_nc
+                        break
+
+                nc_pct_col = 'NC %'
+                if nc_col:
+                    owner_pivot_table[nc_pct_col] = (
+                        owner_pivot_table[nc_col]
+                        .div(owner_pivot_table['Total'].replace(0, pd.NA))
+                        .mul(100)
+                        .round(1)
+                        .fillna(0.0)
+                    )
+
+                # Sort by Total descending, then add TOTAL row
+                owner_pivot_table = owner_pivot_table.sort_values('Total', ascending=False)
+
+                total_row = {'Course Owner': '🔢 TOTAL'}
+                for col in owner_pivot_table.columns:
+                    if col not in ('Course Owner', nc_pct_col):
+                        total_row[col] = owner_pivot_table[col].sum()
+                # Recalculate NC% for TOTAL row
+                if nc_col:
+                    t_nc  = total_row.get(nc_col, 0)
+                    t_tot = total_row.get('Total', 0)
+                    total_row[nc_pct_col] = round(t_nc / t_tot * 100, 1) if t_tot else 0.0
+
+                owner_pivot_table = pd.concat(
+                    [owner_pivot_table, pd.DataFrame([total_row])],
+                    ignore_index=True
+                )
+
+                # Reorder columns: Course Owner | NC count | NC% | other statuses | Total
+                reorder = ['Course Owner']
+                if nc_col:
+                    reorder.append(nc_col)
+                    reorder.append(nc_pct_col)
+                remaining = [c for c in owner_pivot_table.columns if c not in reorder]
+                remaining_no_total = [c for c in remaining if c != 'Total']
+                reorder += remaining_no_total + ['Total']
+                owner_pivot_table = owner_pivot_table[reorder]
+
+                # Style: highlight NC count + NC% columns + TOTAL row
+                def style_owner_status(df):
+                    styles = pd.DataFrame('', index=df.index, columns=df.columns)
+                    # Highlight TOTAL row
+                    total_mask = df['Course Owner'] == '🔢 TOTAL'
+                    styles[total_mask] = 'background-color: #d4edda; font-weight: bold'
+                    # Highlight NC count column
+                    if nc_col and nc_col in df.columns:
+                        styles[nc_col] = styles[nc_col].where(
+                            total_mask,
+                            'background-color: #e2d9f3; color: #6f42c1; font-weight: bold'
+                        )
+                        styles.loc[total_mask, nc_col] = 'background-color: #c1a8e4; font-weight: bold'
+                    # Highlight NC% column
+                    if nc_pct_col in df.columns:
+                        styles[nc_pct_col] = styles[nc_pct_col].where(
+                            total_mask,
+                            'background-color: #ede0ff; color: #5a189a; font-weight: bold'
+                        )
+                        styles.loc[total_mask, nc_pct_col] = 'background-color: #c1a8e4; font-weight: bold'
+                    return styles
+
+                # Format NC% cells with % sign using Styler.format
+                fmt = {nc_pct_col: '{:.1f}%'} if nc_pct_col in owner_pivot_table.columns else {}
+                styled_owner_pivot = (
+                    owner_pivot_table.style
+                    .apply(style_owner_status, axis=None)
+                    .format(fmt)
+                )
+                st.dataframe(styled_owner_pivot, use_container_width=True, height=420)
+
+                # Download button
+                csv_owner_status = owner_pivot_table.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="⬇️ Download Owner × Lead Status Table (CSV)",
+                    data=csv_owner_status,
+                    file_name=f"owner_lead_status_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=False
+                )
+            else:
+                st.info("Course Owner or Lead Status column not available in data.")
+
+            st.divider()
+
             # Lead Data Table
             st.markdown("#### Lead Data")
             st.dataframe(filtered_df, width='stretch', height=300)
