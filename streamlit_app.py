@@ -623,10 +623,11 @@ TEAM_MAPPING = {
     ],
     "Success Squad": [
         "Remya Ravindran", "Sumithra -", "Jayasree -", "SANIJA K P", 
-        "Shubha Lakshmi", "Aneena Elsa Shibu", "Merin j", "Pooja Prabhaji"
+        "Shubha Lakshmi", "Aneena Elsa Shibu", "Merin j", "Pooja Prabhaji",
+        "athira krishna"
     ],
     "TRAINING SQUAD": [
-        "athira krishna", "Gayathri Sandhya"
+        "Gayathri Sandhya"
     ]
 }
 
