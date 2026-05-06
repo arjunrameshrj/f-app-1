@@ -2045,10 +2045,13 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
         "course_name", "program_name", "product_name",
         "enquired_course", "interested_course", "course_interested",
         "program_of_interest", "course_of_interest", "product_of_interest",
+        "which_course_do_you_prefer", "which_course_are_you_interested_in",
+        "select_your_preferred_course_mode", "which_type_of_oet_course__do_you_prefer",
         "firstname", "lastname", "email", "phone", 
         "createdate", "lastmodifieddate", "closedate", "hs_object_id",
         "company", "jobtitle", "country", "amount", "total_revenue",
-        "hs_analytics_source_data_1", "refferal_lead_", "refferred_by", "servicecustomer"
+        "hs_analytics_source_data_1", "refferal_lead_", "refferred_by", "servicecustomer",
+        "utm_campaign", "campaign_name", "hs_analytics_source_data_2"
     ]
     
     all_contacts = []
@@ -2539,7 +2542,9 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None, start_date
             "course", "program", "product", "service", "offering",
             "course_name", "program_name", "product_name",
             "enquired_course", "interested_course", "course_interested",
-            "program_of_interest", "course_of_interest", "product_of_interest"
+            "program_of_interest", "course_of_interest", "product_of_interest",
+            "which_course_do_you_prefer", "which_course_are_you_interested_in",
+            "select_your_preferred_course_mode", "which_type_of_oet_course__do_you_prefer"
         ]
 
         for field in course_fields:
@@ -2607,6 +2612,35 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None, start_date
         except ValueError:
             parsed_amount = 0.0
             
+        # [OK] NEW: Extract Campaign
+        campaign = (
+            properties.get("utm_campaign") or 
+            properties.get("campaign_name") or 
+            properties.get("hs_analytics_source_data_2") or 
+            "Unknown"
+        )
+        if not campaign or str(campaign).strip() == "":
+            campaign = "Unknown"
+            
+        # [OK] NEW: Extract Grouped Course
+        c_lower = str(course_info).lower()
+        if "oet" in c_lower:
+            course_grouped = "OET"
+        elif "german" in c_lower:
+            course_grouped = "German"
+        elif "ielts" in c_lower:
+            course_grouped = "IELTS"
+        elif "haad" in c_lower:
+            course_grouped = "HAAD"
+        elif "dha" in c_lower:
+            course_grouped = "DHA"
+        elif "prometric" in c_lower:
+            course_grouped = "Prometric"
+        elif "pte" in c_lower:
+            course_grouped = "PTE"
+        else:
+            course_grouped = str(course_info).strip() if course_info and str(course_info).strip() else "Unknown"
+            
         processed_data.append({
             "ID": contact.get("id", ""),
             "Full Name": full_name,
@@ -2615,7 +2649,7 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None, start_date
             "Company": properties.get("company", ""),
             "Job Title": properties.get("jobtitle", ""),
             "Country": properties.get("country", ""),
-            "Course/Program": course_info,
+            "Course/Program": str(course_info).strip() if course_info and str(course_info).strip() else "Unknown",
             "Course Owner": owner_name,
             "Lead Status": lead_status,  # [OK] NO CUSTOMER HERE
             "Created Date": properties.get("createdate", ""),
@@ -2626,7 +2660,9 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None, start_date
             "Traffic Source Drill-Down 1": properties.get("hs_analytics_source_data_1", ""),
             "Referral Lead": properties.get("refferal_lead_", ""),
             "Referred By": properties.get("refferred_by", ""),
-            "Service-Customer": properties.get("servicecustomer", "")
+            "Service-Customer": properties.get("servicecustomer", ""),
+            "Campaign": campaign,
+            "Course Grouped": course_grouped
         })
     
     df = pd.DataFrame(processed_data)
@@ -4205,7 +4241,7 @@ def main():
         st.divider()
         
         # [OK] ENHANCED: Create tabs with NEW METRIC 6 & 7 tab
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16, tab17 = st.tabs([
             " Lead Analysis", 
             " Customer Analysis", 
             " Owner KPI Dashboard",
@@ -4220,7 +4256,9 @@ def main():
             " Team Performance 2",
             " This month lead performance",
             " Qualified Lead Drill-down",
-            "ðŸ“… Cohort Analysis"
+            "ðŸ“… Cohort Analysis",
+            "📢 Campaign Analysis",
+            "📚 Course Analysis"
         ])
         
         # SECTION 1: Lead Analysis
@@ -4232,12 +4270,19 @@ def main():
             
             status_counts = filtered_df['Lead Status'].value_counts().reset_index()
             status_counts.columns = ['Lead Status', 'Count']
+            status_counts['Lead Status'] = status_counts['Lead Status'].astype(str)
+            status_counts = status_counts[status_counts['Count'] > 0]
+            
+            safe_data = pd.DataFrame({
+                'Lead Status': status_counts['Lead Status'].tolist(),
+                'Count': status_counts['Count'].tolist()
+            })
             
             col1, col2 = st.columns(2)
             
             with col1:
                 fig = px.pie(
-                    status_counts,
+                    safe_data,
                     values='Count',
                     names='Lead Status',
                     title='Lead Status Distribution',
@@ -4806,9 +4851,16 @@ def main():
                     if len(status_counts) > 0:
                         chart_data = status_counts.reset_index()
                         chart_data.columns = ['Lead Status', 'Count']
+                        chart_data['Lead Status'] = chart_data['Lead Status'].astype(str)
+                        chart_data = chart_data[chart_data['Count'] > 0]
+                        
+                        safe_data = pd.DataFrame({
+                            'Lead Status': chart_data['Lead Status'].tolist(),
+                            'Count': chart_data['Count'].tolist()
+                        })
                         
                         fig = px.bar(
-                            chart_data,
+                            safe_data,
                             x='Lead Status',
                             y='Count',
                             title='Lead Status Distribution',
@@ -5574,6 +5626,86 @@ def main():
                     st.info("No customers found that were created in the Lead Date Range and closed in the Deal Date Range.")
     
 
+
+        # SECTION 16: Campaign Analysis
+        with tab16:
+            st.markdown('<div class="section-header"><h3> 📢 Campaign Analysis</h3></div>', unsafe_allow_html=True)
+            
+            if filtered_df.empty:
+                st.warning("No data available for the selected filters.")
+            else:
+                camp_df = filtered_df.copy()
+                camp_grouped = camp_df.groupby('Campaign').agg(
+                    Total_Leads=('ID', 'count'),
+                    Customers=('Lead Status Raw', lambda x: x.str.lower().isin(['customer']).sum())
+                ).reset_index()
+                
+                # Check for Customers mapped to "Customer" in standard Lead Status map
+                if 'Lead Status' in camp_df.columns:
+                    cust2 = camp_df.groupby('Campaign').agg(
+                        Customers2=('Lead Status', lambda x: x.isin(['Customer', 'customer']).sum())
+                    ).reset_index()
+                    camp_grouped['Customers'] = camp_grouped['Customers'] + cust2['Customers2']
+                
+                camp_grouped['Conversion %'] = (camp_grouped['Customers'] / camp_grouped['Total_Leads'] * 100).round(2)
+                camp_grouped = camp_grouped.sort_values('Total_Leads', ascending=False)
+                
+                camp_grouped.rename(columns={'Total_Leads': 'Total Leads', 'Customers': 'Converted Customers'}, inplace=True)
+                
+                st.markdown("#### Performance by Campaign")
+                st.dataframe(
+                    camp_grouped,
+                    use_container_width=True
+                )
+                
+        # SECTION 17: Course Analysis (Grouped + Cold Leads)
+        with tab17:
+            st.markdown('<div class="section-header"><h3> 📚 Course Analysis & Cold Leads</h3></div>', unsafe_allow_html=True)
+            
+            if filtered_df.empty:
+                st.warning("No data available for the selected filters.")
+            else:
+                c_df = filtered_df.copy()
+                
+                course_grouped = c_df.groupby('Course Grouped').agg(
+                    Total_Leads=('ID', 'count'),
+                    Cold_Leads=('Lead Status Raw', lambda x: x.str.lower().isin(['neutral prospect', 'cold', 'neutral_prospect']).sum())
+                ).reset_index()
+                
+                cust_grouped = c_df.groupby('Course Grouped').agg(
+                    Customers=('Lead Status Raw', lambda x: x.str.lower().isin(['customer']).sum())
+                ).reset_index()
+                
+                course_grouped['Customers'] = cust_grouped['Customers']
+                
+                if 'Lead Status' in c_df.columns:
+                    cust2 = c_df.groupby('Course Grouped').agg(
+                        Customers2=('Lead Status', lambda x: x.isin(['Customer', 'customer']).sum())
+                    ).reset_index()
+                    course_grouped['Customers'] = course_grouped['Customers'] + cust2['Customers2']
+                    
+                course_grouped['Conversion %'] = (course_grouped['Customers'] / course_grouped['Total_Leads'] * 100).round(2)
+                course_grouped = course_grouped.sort_values('Total_Leads', ascending=False)
+                
+                course_grouped.rename(columns={'Total_Leads': 'Total Leads', 'Customers': 'Converted Customers', 'Cold_Leads': 'Cold Leads'}, inplace=True)
+                
+                st.markdown("#### Performance by Grouped Course")
+                st.dataframe(
+                    course_grouped,
+                    use_container_width=True
+                )
+                
+                if not course_grouped.empty:
+                    fig = px.bar(
+                        course_grouped.head(10),
+                        x='Course Grouped',
+                        y='Cold Leads',
+                        title='Top 10 Courses by Cold Leads',
+                        color='Cold Leads',
+                        color_continuous_scale='Blues'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
     else:
         # Welcome screen
         st.markdown(
@@ -5585,6 +5717,8 @@ def main():
                 </p>
                 <div style='margin-top: 3rem;'>
                     <img src="https://cdn-icons-png.flaticon.com/512/2920/2920326.png" width="150" style="opacity: 0.5;">
+
+
                 </div>
             </div>
             """,
