@@ -40,7 +40,14 @@ EXCLUDED_OWNERS = [
     "Rekha Raveendran",
     "Aswathy Krishnan",
     "Chandana Sekhar",
-    "nandhana.sivakumar"
+    "nandhana.sivakumar",
+    "sreelekshmi s", "Sreelekshmi S",
+    "Anitha S", "anitha s",
+    "Sreerenjini S", "sreerenjini s",
+    "MEREENA JAMES", "Mereena James", "mereena james",
+    "Anu M R", "anu m r", "Anu MR", "anu mr",
+    "Vishnuja B", "vishnuja b",
+    "Alka Haridas", "alka haridas"
 ]
 
 # Excluded Deal Name Keywords - deals containing these terms are FULLY excluded from ALL counts and revenue
