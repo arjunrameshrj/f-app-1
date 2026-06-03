@@ -52,8 +52,8 @@ EXCLUDED_OWNERS = [
 
 # Excluded Deal Name Keywords - deals containing these terms are FULLY excluded from ALL counts and revenue
 EXCLUDED_DEAL_KEYWORDS = [
-    "vacation batch",
-    "vacation_batch",
+    # "vacation batch",
+    # "vacation_batch",
 ]
 
 # Will be populated dynamically
