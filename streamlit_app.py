@@ -30,30 +30,24 @@ COLOR_PALETTE = px.colors.qualitative.Set2
 
 # Excluded Course Owners
 EXCLUDED_OWNERS = [
-    "Mahalekshmi M J",
-    "Sreeja Anoop",
-    "arya.krishnan",
-    "Devi Krishna",
-    "Aneesha S",
-    "Sonia William",
-    "recruitment",
-    "Rekha Raveendran",
-    "Aswathy Krishnan",
-    "Chandana Sekhar",
-    "nandhana.sivakumar",
-    "sreelekshmi s", "Sreelekshmi S",
-    "Anitha S", "anitha s",
+    "Mahalekshmi M J", "Sreeja Anoop", "arya.krishnan", "Devi Krishna",
+    "Aneesha S", "Sonia William", "Rekha Raveendran", "Aswathy Krishnan",
+    "Chandana Sekhar", "nandhana.sivakumar", "Nandana Sivakumar",
+    "sreelekshmi s", "Sreelekshmi S", "Sari Raveendran", "Mahalekshmi MJ",
     "Sreerenjini S", "sreerenjini s",
     "MEREENA JAMES", "Mereena James", "mereena james",
-    "Anu M R", "anu m r", "Anu MR", "anu mr",
     "Vishnuja B", "vishnuja b",
-    "Alka Haridas", "alka haridas"
+    "Anu M R", "anu m r", "Anu MR", "anu mr",
+    "Anitha S", "anitha s",
+    "Alka Haridas", "alka haridas",
+    "recruitment", "Nandhana.Sivakumar"
 ]
 
 # Excluded Deal Name Keywords - deals containing these terms are FULLY excluded from ALL counts and revenue
 EXCLUDED_DEAL_KEYWORDS = [
-    # "vacation batch",
-    # "vacation_batch",
+    "vacation",
+    "vacation batch",
+    "vacation_batch",
 ]
 
 # Will be populated dynamically
@@ -1062,6 +1056,62 @@ def create_qualified_lead_drilldown(df_contacts):
     
     return result
 
+# [OK] NEW: NQ / NI / NC Drilldown
+def create_nq_ni_nc_drilldown(df_contacts):
+    """
+    Generate breakdown for NQ, NI, NC Leads by Traffic Source Drill-Down 2 (Voxbay etc.).
+    """
+    if df_contacts.empty:
+        return pd.DataFrame()
+        
+    # Filter for NQ, NI, NC only
+    target_statuses = ['Not Qualified', 'Not Interested', 'Not Connected', 'Not Connected (NC)']
+    filtered_df = df_contacts[df_contacts['Lead Status'].isin(target_statuses)].copy()
+    
+    if filtered_df.empty:
+        return pd.DataFrame()
+        
+    # Standardize Traffic Source Drill-Down 2
+    def categorize_source(source):
+        s = str(source).lower().strip()
+        if not s or s == 'none': return 'Unknown'
+        if s == '23085933': return 'Voxbay'
+        if s == '973614': return 'WhatsApp'
+        return str(source).strip()
+
+    # Use 'Traffic Source Drill-Down 2' if available, otherwise 'Campaign'
+    if 'Traffic Source Drill-Down 2' in filtered_df.columns:
+        filtered_df['Source Category'] = filtered_df['Traffic Source Drill-Down 2'].apply(categorize_source)
+    else:
+        filtered_df['Source Category'] = filtered_df['Campaign'].apply(categorize_source)
+        
+    # Create the matrix/cross-tab by Lead Status and Source Category
+    pivot = filtered_df.groupby(['Source Category', 'Lead Status']).size().unstack(fill_value=0)
+    
+    # Ensure columns exist
+    for col in target_statuses:
+        if col not in pivot.columns: pivot[col] = 0
+        
+    pivot['Total NQ/NI/NC'] = pivot[target_statuses].sum(axis=1)
+    
+    # Reset index for display
+    result = pivot.reset_index()
+    
+    # Sort by total descending
+    result = result.sort_values('Total NQ/NI/NC', ascending=False)
+    
+    # Add TOTAL row
+    if not result.empty:
+        total_series_dict = {'Source Category': 'TOTAL'}
+        for col in target_statuses:
+            total_series_dict[col] = result[col].sum()
+        total_series_dict['Total NQ/NI/NC'] = result['Total NQ/NI/NC'].sum()
+        
+        total_row = pd.Series(total_series_dict)
+        result = pd.concat([result, pd.DataFrame([total_row])], ignore_index=True)
+    
+    return result
+
 # [OK] NEW: CRM Owner Breakdown
 def create_crm_owner_breakdown(df_contacts):
     """
@@ -1807,13 +1857,15 @@ def normalize_lead_status(raw_status, close_date=None, start_date=None, end_date
             is_in_range = True
             if close_date and start_date and end_date:
                 try:
-                    # Parse close_date if it's a string
                     if isinstance(close_date, str):
-                        c_date = datetime.strptime(close_date[:10], "%Y-%m-%d").date()
+                        if close_date.isdigit():
+                            c_dt = datetime.fromtimestamp(int(close_date)/1000).date()
+                        else:
+                            c_dt = datetime.strptime(close_date[:10], "%Y-%m-%d").date()
                     else:
-                        c_date = close_date
+                        c_dt = close_date
                     
-                    if not (start_date <= c_date <= end_date):
+                    if not (start_date <= c_dt <= end_date):
                         is_in_range = False
                 except:
                     pass
@@ -2118,6 +2170,7 @@ def fetch_hubspot_contacts_with_date_filter(api_key, date_field, start_date, end
                     time.sleep(3)
                     continue
                 if response.status_code == 400:
+                    print("ERROR 400 fetching partials:", response.text)
                     break
                 response.raise_for_status()
                 data = response.json()
@@ -2161,7 +2214,7 @@ def fetch_hubspot_deals(api_key, start_date, end_date, customer_stage_ids):
     deal_properties = [
         "dealname", "dealstage", "amount", "hubspot_owner_id", "closedate", "createdate",
         "course", "program", "product", "service", "offering", "course_name", "program_name",
-        "partial_amount", "hs_v2_date_entered_2107527928", "hs_v2_date_entered_2171957962",
+        "partial_amount", "partial_amount_received_date", "hs_v2_date_entered_2107527928", "hs_v2_date_entered_2171957962",
         "hs_v2_date_entered_contractsent", "hs_v2_date_entered_presentationscheduled",
         "hs_v2_date_entered_decisionmakerboughtin", "hs_analytics_source"
     ]
@@ -2277,52 +2330,71 @@ def fetch_partial_payment_deals(api_key, start_date, end_date):
     url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals/search"
     
     ist = pytz.timezone('Asia/Kolkata')
-    start_utc = datetime.combine(start_date, datetime.min.time())
-    start_utc = ist.localize(start_utc).astimezone(pytz.UTC).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-    end_utc = datetime.combine(end_date, datetime.max.time())
-    end_utc = ist.localize(end_utc).astimezone(pytz.UTC).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+    dt_start = ist.localize(datetime.combine(start_date, datetime.min.time()))
+    dt_end = ist.localize(datetime.combine(end_date, datetime.max.time()))
+    start_ts = int(dt_start.astimezone(pytz.UTC).timestamp() * 1000)
+    end_ts = int(dt_end.astimezone(pytz.UTC).timestamp() * 1000)
     
     properties = [
         "dealname", "dealstage", "amount", "partial_amount",
         "hubspot_owner_id", "closedate", "createdate",
         "course", "program", "course_name", "program_name",
-        "hs_v2_date_entered_2107527928", "hs_v2_date_entered_2171957962",
+        "partial_amount_received_date", "hs_v2_date_entered_2107527928", "hs_v2_date_entered_2171957962",
     ]
     
     all_deals = []
     
-    for stage_id in PARTIAL_STAGE_IDS:
-        prop_name = f"hs_v2_date_entered_{stage_id}"
-        after = None
-        while True:
-            body = {
-                "filterGroups": [{
-                    "filters": [
-                        {"propertyName": prop_name, "operator": "GTE", "value": start_utc},
-                        {"propertyName": prop_name, "operator": "LTE", "value": end_utc}
-                    ]
-                }],
-                "properties": properties,
-                "limit": 100,
-            }
-            if after:
-                body["after"] = after
-            try:
-                response = requests.post(url, headers=headers, json=body, timeout=30)
-                if response.status_code == 429:
-                    time.sleep(3)
-                    continue
-                if response.status_code == 400:
-                    break
-                response.raise_for_status()
-                data = response.json()
-                batch = data.get("results", [])
-                all_deals.extend(batch)
-                after = data.get("paging", {}).get("next", {}).get("after")
-                if not after:
-                    break
-            except Exception:
+    filter_groups = [
+        {
+            "filters": [
+                {"propertyName": "hs_v2_date_entered_2107527928", "operator": "BETWEEN", "value": start_ts, "highValue": end_ts}
+            ]
+        },
+        {
+            "filters": [
+                {"propertyName": "hs_v2_date_entered_2171957962", "operator": "BETWEEN", "value": start_ts, "highValue": end_ts}
+            ]
+        },
+        {
+            "filters": [
+                {"propertyName": "partial_amount_received_date", "operator": "BETWEEN", "value": start_ts, "highValue": end_ts}
+            ]
+        }
+    ]
+    
+    # We only need specific properties to calculate partial revenue
+    properties = [
+        "dealname", "dealstage", "amount", "partial_amount",
+        "hubspot_owner_id", "closedate", "createdate",
+        "course", "program", "course_name", "program_name",
+        "partial_amount_received_date", "hs_v2_date_entered_2107527928", "hs_v2_date_entered_2171957962",
+    ]
+
+    after = None
+    while True:
+        body = {
+            "filterGroups": filter_groups,
+            "properties": properties,
+            "limit": 100,
+        }
+        if after:
+            body["after"] = after
+        try:
+            response = requests.post(url, headers=headers, json=body, timeout=30)
+            if response.status_code == 429:
+                time.sleep(3)
+                continue
+            if response.status_code == 400:
                 break
+            response.raise_for_status()
+            data = response.json()
+            batch = data.get("results", [])
+            all_deals.extend(batch)
+            after = data.get("paging", {}).get("next", {}).get("after")
+            if not after:
+                break
+        except Exception:
+            break
     
     return all_deals
 
@@ -2335,6 +2407,13 @@ def calculate_partial_revenue(partial_deals, admission_deal_ids, owner_mapping, 
     partial_offline_total = 0
     partial_online_count = 0
     partial_offline_count = 0
+    
+    import pytz
+    from datetime import datetime
+    ist = pytz.timezone('Asia/Kolkata')
+    dt_end = ist.localize(datetime.combine(end_date, datetime.max.time()))
+    end_ts = int(dt_end.astimezone(pytz.UTC).timestamp() * 1000)
+    dt_start_ist = ist.localize(datetime.combine(start_date, datetime.min.time()))
     
     for deal in partial_deals:
         deal_id = str(deal.get("id"))
@@ -2359,6 +2438,24 @@ def calculate_partial_revenue(partial_deals, admission_deal_ids, owner_mapping, 
         if owner_name in EXCLUDED_OWNERS:
             continue
         
+        # Ignore if it became a customer within the same reporting month or before
+        dealstage = props.get("dealstage", "")
+        customer_stages = ["closedwon", "1884422889", "2208152296", "1955461874", "1955461879", "contractsent"]
+        closedate_str = props.get("closedate")
+        skip_due_to_close = False
+        if dealstage in customer_stages and closedate_str:
+            try:
+                if str(closedate_str).isdigit():
+                    cd_dt = datetime.fromtimestamp(int(closedate_str)/1000, tz=pytz.UTC)
+                else:
+                    cd_dt = datetime.fromisoformat(str(closedate_str).replace("Z", "+00:00"))
+                if cd_dt.timestamp() * 1000 <= end_ts:
+                    skip_due_to_close = True
+            except:
+                pass
+        if skip_due_to_close:
+            continue
+        
         partial_amount_str = props.get("partial_amount", "0")
         partial_amount = 0
         if partial_amount_str:
@@ -2369,26 +2466,44 @@ def calculate_partial_revenue(partial_deals, admission_deal_ids, owner_mapping, 
         
         if partial_amount <= 0:
             continue
-        
-        # Determine which pipeline
-        partial_ts_online = props.get("hs_v2_date_entered_2107527928", "")
-        partial_ts_offline = props.get("hs_v2_date_entered_2171957962", "")
-        
-        partial_ts = partial_ts_online or partial_ts_offline
-        if not partial_ts:
+            
+        custom_date = props.get("partial_amount_received_date")
+        skip_deal = False
+
+        if custom_date:
+            try:
+                if str(custom_date).isdigit():
+                    c_dt = datetime.fromtimestamp(int(custom_date)/1000, tz=pytz.UTC)
+                else:
+                    c_dt = datetime.fromisoformat(str(custom_date).replace('Z', '+00:00'))
+                    if c_dt.tzinfo is None:
+                        c_dt = ist.localize(c_dt).astimezone(pytz.UTC)
+                if c_dt < dt_start_ist.astimezone(pytz.UTC):
+                    skip_deal = True
+            except: pass
+            
+        if skip_deal:
             continue
         
-        try:
-            partial_dt = datetime.fromisoformat(partial_ts.replace('Z', '+00:00'))
-            if start_date.month <= partial_dt.month and partial_dt.year == start_date.year:
-                if partial_ts_online:
-                    partial_online_total += partial_amount
-                    partial_online_count += 1
-                else:
-                    partial_offline_total += partial_amount
-                    partial_offline_count += 1
-        except:
-            pass
+        p1 = props.get("hs_v2_date_entered_2107527928", "")
+        p2 = props.get("hs_v2_date_entered_2171957962", "")
+        
+        is_offline = False
+        
+        if p2:
+            try:
+                dt2 = datetime.fromisoformat(p2.replace('Z', '+00:00'))
+                if dt_start_ist.astimezone(pytz.UTC) <= dt2 <= dt_end.astimezone(pytz.UTC):
+                    is_offline = True
+            except: pass
+        
+        # We classify it as offline if p2 was in the month. If neither or just p1, online.
+        if is_offline or (p2 and not p1):
+            partial_offline_total += partial_amount
+            partial_offline_count += 1
+        else:
+            partial_online_total += partial_amount
+            partial_online_count += 1
     
     return {
         'online_total': partial_online_total,
@@ -2553,22 +2668,13 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None, start_date
             "which_course_do_you_prefer", "which_course_are_you_interested_in",
             "select_your_preferred_course_mode", "which_type_of_oet_course__do_you_prefer"
         ]
-
         for field in course_fields:
             if field in properties and properties[field] and str(properties[field]).strip():
                 course_info = properties[field]
                 break
-
+                
         # [EXCLUDED] Skip ALL Vacation Batch contacts â€” no leads, no qualified leads, nothing
         if any(kw in str(course_info).lower().strip() for kw in EXCLUDED_DEAL_KEYWORDS):
-            continue
-
-        # [EXCLUDED] Also check raw property values directly in case course_info missed it
-        _all_course_vals = " ".join(
-            str(properties.get(f, "")).lower()
-            for f in course_fields
-        )
-        if any(kw in _all_course_vals for kw in EXCLUDED_DEAL_KEYWORDS):
             continue
         
         # Owner ID extraction
@@ -2665,6 +2771,7 @@ def process_contacts_data(contacts, owner_mapping=None, api_key=None, start_date
             "Owner ID": owner_id,
             "Amount": parsed_amount,
             "Traffic Source Drill-Down 1": properties.get("hs_analytics_source_data_1", ""),
+            "Traffic Source Drill-Down 2": properties.get("hs_analytics_source_data_2", ""),
             "Referral Lead": properties.get("refferal_lead_", ""),
             "Referred By": properties.get("refferred_by", ""),
             "Service-Customer": properties.get("servicecustomer", ""),
@@ -2769,24 +2876,35 @@ def process_deals_as_customers(deals, owner_mapping=None, api_key=None, all_stag
                 partial_amount = 0
         
         if partial_amount > 0:
-            # Check partial payment timestamps (Online and Offline pipeline)
-            partial_ts_online = properties.get("hs_v2_date_entered_2107527928", "")
-            partial_ts_offline = properties.get("hs_v2_date_entered_2171957962", "")
-            partial_ts = partial_ts_online or partial_ts_offline
+            custom_date = properties.get("partial_amount_received_date")
+            p1 = properties.get("hs_v2_date_entered_2107527928", "")
+            p2 = properties.get("hs_v2_date_entered_2171957962", "")
             
-            if partial_ts:
+            partial_dt = None
+            ist_tz = pytz.timezone('Asia/Kolkata')
+            dt_start_ist = ist_tz.localize(datetime.combine(start_date, datetime.min.time()))
+            
+            if custom_date:
                 try:
-                    from datetime import datetime
-                    # Parse the HubSpot timestamp
-                    if isinstance(partial_ts, str) and partial_ts:
+                    if str(custom_date).isdigit():
+                        partial_dt = datetime.fromtimestamp(int(custom_date)/1000, tz=pytz.UTC)
+                    else:
+                        partial_dt = datetime.fromisoformat(str(custom_date).replace('Z', '+00:00'))
+                        if partial_dt.tzinfo is None:
+                            partial_dt = ist_tz.localize(partial_dt).astimezone(pytz.UTC)
+                except: pass
+                
+            if not partial_dt:
+                partial_ts = p1 or p2
+                if partial_ts:
+                    try:
                         partial_dt = datetime.fromisoformat(partial_ts.replace('Z', '+00:00'))
-                        start_ts = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=partial_dt.tzinfo) if hasattr(partial_dt, 'tzinfo') and partial_dt.tzinfo else datetime.combine(start_date, datetime.min.time())
-                        
-                        # Deduct if partial payment was before reporting period start
-                        if partial_dt < start_ts:
-                            amount = amount - partial_amount
-                except Exception:
-                    pass  # If timestamp parsing fails, use full amount
+                        if partial_dt.tzinfo is None:
+                            partial_dt = ist_tz.localize(partial_dt).astimezone(pytz.UTC)
+                    except: pass
+                    
+            if partial_dt and partial_dt < dt_start_ist.astimezone(pytz.UTC):
+                amount -= partial_amount
         
         # Get close date
         close_date = properties.get("closedate", "")
@@ -4248,7 +4366,7 @@ def main():
         st.divider()
         
         # [OK] ENHANCED: Create tabs with NEW METRIC 6 & 7 tab
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16, tab17 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16, tab17, tab18 = st.tabs([
             " Lead Analysis", 
             " Customer Analysis", 
             " Owner KPI Dashboard",
@@ -4265,7 +4383,8 @@ def main():
             " Qualified Lead Drill-down",
             "ðŸ“… Cohort Analysis",
             "📢 Campaign Analysis",
-            "📚 Course Analysis"
+            "📚 Course Analysis",
+            "🔴 NQ/NI/NC Breakdown"
         ])
         
         # SECTION 1: Lead Analysis
@@ -5410,6 +5529,36 @@ def main():
                     st.metric("From Referral", f"{referral_ql:,}", f"{referral_ql/total_ql*100:.1f}%" if total_ql > 0 else "0%")
             else:
                 st.info("No Qualified Lead data available for the selected filters.")
+
+        # [OK] NEW: SECTION 15: NQ/NI/NC Drill-down
+        with tab18:
+            st.markdown('<div class="section-header"><h3> NQ / NI / NC Drill-down (Voxbay / Traffic Source 2)</h3></div>', unsafe_allow_html=True)
+            
+            nq_drilldown = create_nq_ni_nc_drilldown(filtered_df)
+            
+            if not nq_drilldown.empty:
+                st.markdown("#### NQ, NI, NC Leads by Traffic Source Drill-Down 2 (Voxbay integration)")
+                
+                def highlight_total_nq(s):
+                    if str(s['Source Category']).upper() == 'TOTAL':
+                        return ['background-color: #f8d7da; font-weight: bold' for _ in s]
+                    return ['' for _ in s]
+                    
+                st.dataframe(
+                    nq_drilldown.style.apply(highlight_total_nq, axis=1),
+                    use_container_width=True
+                )
+                
+                total_row = nq_drilldown[nq_drilldown['Source Category'] == 'TOTAL']
+                if not total_row.empty:
+                    total_nq = total_row['Total NQ/NI/NC'].iloc[0]
+                else:
+                    total_row_fallback = nq_drilldown.iloc[-1] if not nq_drilldown.empty else None
+                    total_nq = total_row_fallback['Total NQ/NI/NC'] if total_row_fallback is not None else 0
+                    
+                st.metric("Total NQ/NI/NC Leads", f"{total_nq:,}")
+            else:
+                st.info("No NQ, NI, or NC Lead data available for the selected filters.")
         
         # SECTION 10: Month Comparison
         with tab11:
