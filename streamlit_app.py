@@ -635,7 +635,7 @@ TEAM_MAPPING = {
         "Gayathri Sandhya"
     ],
     "Trainees Squad": [
-        "Avani Raj MS", "Vinija TJ"
+        "Avani Raj MS", "Vinija TJ", "Nayana Raveendran"
     ]
 }
 
