@@ -40,7 +40,11 @@ EXCLUDED_OWNERS = [
     "Anu M R", "anu m r", "Anu MR", "anu mr",
     "Anitha S", "anitha s",
     "Alka Haridas", "alka haridas",
-    "recruitment", "Nandhana.Sivakumar"
+    "recruitment", "Nandhana.Sivakumar",
+    "marketing tijusacademy", "Marketing Tijusacademy", "Marketing TijusAcademy",
+    "Marketing tijusacademy", "MARKETING TIJUSACADEMY", "marketing.tijusacademy",
+    "P R Gayathri", "p r gayathri", "P R GAYATHRI", "PR Gayathri", "pr gayathri",
+    "P R  Gayathri", "P.R Gayathri", "P.R. Gayathri"
 ]
 
 # Excluded Deal Name Keywords - deals containing these terms are FULLY excluded from ALL counts and revenue
@@ -629,6 +633,9 @@ TEAM_MAPPING = {
     ],
     "TRAINING SQUAD": [
         "Gayathri Sandhya"
+    ],
+    "Trainees Squad": [
+        "Avani Raj MS", "Vinija TJ"
     ]
 }
 
