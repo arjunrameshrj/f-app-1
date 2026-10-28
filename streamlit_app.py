@@ -624,7 +624,7 @@ CUSTOMER_KEYWORDS_BLOCKLIST = [
 TEAM_MAPPING = {
     "Momentum Makers": [
         "Nisha Samuel", "Bindu -", "Remya Raghunath", "Jibymol Varghese", 
-        "akhila shaji", "Geethu Babu", "Arya S", "Parvathy R"
+        "akhila shaji", "Geethu Babu", "Arya S"
     ],
     "Success Squad": [
         "Remya Ravindran", "Sumithra -", "Jayasree -", "SANIJA K P", 
@@ -634,8 +634,9 @@ TEAM_MAPPING = {
     "TRAINING SQUAD": [
         "Gayathri Sandhya"
     ],
-    "Trainees Squad": [
-        "Avani Raj MS", "Vinija TJ", "Nayana Raveendran"
+    "Revenue Riders": [
+        "Vinija TJ", "Preethy Mol", "Neenu Mariam Varghese",
+        "Shyamily M S", "Parvathy R", "Avani Raj MS"
     ]
 }
 
